@@ -1,0 +1,9 @@
+/foo_countryflags
+/Release
+/x64
+/.vs
+.gitattributes
+foo_countryflags.sln
+foo_countryflags.vcxproj*
+/bk
+foo_countryflags.user
