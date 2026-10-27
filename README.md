@@ -2,42 +2,42 @@
 
 A foobar2000 component (x86 and x64) that turns country codes or names stored in your tags into flag-related title formatting fields.
 
-## Fields
+## Title-formatting fields
 
-| Field | Result | Example |
+The component exposes five sets of fields.
+
+| Source | Default input script | Field names |
 |---|---|---|
-| `%countryflag_iso2%` | ISO 3166-1 alpha-2 code, upper case | `GR` |
-| `%countryflag_iso3%` | ISO 3166-1 alpha-3 code, upper case | `GRC` |
-| `%countryflag_name%` | English country name | `Greece` |
-| `%countryflag_path%` | Full path to the flag image, only if the file exists | `...\flags\gr.png` |
-| `%countryflag_emoji%` | Flag emoji built from regional-indicator characters | 🇬🇷 |
+| Source 1 | `%country%` | `%countryflag_emoji%`, `%countryflag_path%`, `%countryflag_name%`, `%countryflag_iso2%`, `%countryflag_iso3%` |
+| Source 2 | `%artistcountry%` | `%countryflag_artist_emoji%`, `%countryflag_artist_path%`, `%countryflag_artist_name%`, `%countryflag_artist_iso2%`, `%countryflag_artist_iso3%` |
+| Source 3 | Empty | `%countryflag_3_emoji%`, `%countryflag_3_path%`, `%countryflag_3_name%`, `%countryflag_3_iso2%`, `%countryflag_3_iso3%` |
+| Source 4 | Empty | `%countryflag_4_emoji%`, `%countryflag_4_path%`, `%countryflag_4_name%`, `%countryflag_4_iso2%`, `%countryflag_4_iso3%` |
+| Source 5 | Empty | `%countryflag_5_emoji%`, `%countryflag_5_path%`, `%countryflag_5_name%`, `%countryflag_5_iso2%`, `%countryflag_5_iso3%` |
 
-If no country can be determined, the field is empty, so `$if(%countryflag_iso2%,...)` works as expected.
+Each set contains these values:
 
-## How the country is found
+- `emoji`: flag emoji built from regional-indicator characters.
+- `path`: full path to the flag image, only if the file exists.
+- `name`: English country name.
+- `iso2`: uppercase ISO 3166-1 alpha-2 code, e.g. `GR`.
+- `iso3`: uppercase ISO 3166-1 alpha-3 code, e.g. `GRC`.
 
-The component checks a list of tag fields in order and uses the first value it recognises. The default list is:
+If no country can be determined for a source, that source's fields are empty, so `$if(%countryflag_iso2%,...)` works as expected.
 
-```
-COUNTRYCODE;COUNTRY;ARTISTCOUNTRY;RELEASECOUNTRY
-```
+### Source suffixes
 
-A tag value can be an alpha-2 code (`GR`), an alpha-3 code (`GRC`) or an English name (`Greece`).
+Open **Preferences > Tools > Country Flags** to configure each source's title-formatting script and suffix.
 
-Common aliases such as `UK`, `Czech Republic` and `Russian Federation` are also understood.
-            {"united states of america", "US"}, {"czech republic", "CZ"}, {"turkiye", "TR"},
-            {"türkiye", "TR"}, {"burma", "MM"}, {"ivory coast", "CI"}, {"cape verde", "CV"},
-            {"vatican", "VA"}, {"macedonia", "MK"}, {"swaziland", "SZ"}, {"east timor", "TL"},
-            {"russian federation", "RU"}, {"korea", "KR"}, {"great britain", "GB"},
-            {"england", "GB"}, {"scotland", "GB"}, {"wales", "GB"}, {"uk", "GB"},
-            {"holland", "NL"}, {"hellas", "GR"}
+- **Source 1** keeps the original, unsuffixed field names (`%countryflag_emoji%`, `%countryflag_path%`, etc.). Its field names are fixed.
+- **Sources 2–5** use the required `countryflag_` prefix plus the suffix entered by the user. Enter only the suffix value; do not type `countryflag_`.
+- Example: entering `artist` produces `%countryflag_artist_emoji%`, `%countryflag_artist_path%`, `%countryflag_artist_name%`, `%countryflag_artist_iso2%`, and `%countryflag_artist_iso3%`.
+- Default suffixes are `artist`, `3`, `4`, and `5` for Sources 2–5. Suffixes must not be empty.
+- **Restart foobar2000 after changing suffixes.** The available title-formatting field names are enumerated by foobar2000 and do not update immediately when the suffix setting changes.
+- Source scripts are title-formatting expressions that return a country code or country name. For example, `%artistcountry%`. Sources 3–5 have empty scripts by default and need to be configured before they return country data.
 
-## Configuration
+## How a country value is interpreted
 
-Preferences > Advanced > Tools > Country flags
-
-- **Source tag fields**: semicolon-separated list of tags to check, first match wins.
-- **Flag image folder**: leave empty to use the `flags` folder next to the component.
+A source script should return a country alpha-2 code (`GR`), alpha-3 code (`GRC`) or English name (`Greece`). Common aliases such as `UK`, `Czech Republic` and `Russian Federation` are also understood.
 
 ## Installation
 
@@ -68,12 +68,12 @@ var img = path ? gdi.Image(path) : null;
 
 - **Emoji on Windows**: the default Windows emoji font shows flag emoji as two letters (e.g. "GR") instead of a flag. `%countryflag%` only renders real flags with a flag-capable font such as Twemoji Country Flags. For reliable results, use `%countryflag_path%` with PNG images.
 - **No `$function()` syntax**: foobar2000 does not let components register global title formatting functions, only fields. A call like `$flag(%x%)` is therefore not possible; set the source tags in preferences instead.
-- **Caching**: the source tag list and the existence of each flag image are cached. Each flag file check is repeated after about 30 seconds, so a flag you add or delete while foobar2000 is running is picked up within that time (or immediately if you change the flag folder setting).																																																																						  
+- **Caching and restart**: changing source suffixes requires restarting foobar2000 so its title-formatting field list is updated. Flag image existence is checked again after about 30 seconds, so adding or deleting a flag image while foobar2000 is running is picked up within that time (or immediately if you change the flag folder setting).																																																																						  
 - **Thread safety**: fields are evaluated from multiple threads. The component reads its data once, lazily, and only reads configuration afterwards.
 
 ## Data files
 
-- `countries.txt`: one country per line in the format `ISO2|ISO3|Name`. It follows ISO 3166-1 and also includes Kosovo using the user-assigned code `XKX`. Edit it to add aliases or change names.If you add entries create a backup, component updates will wipe the file.
+- `countries.txt`: one country per line in the format `ISO2|ISO3|Name`. It follows ISO 3166-1 and also includes Kosovo using the user-assigned code `XKX`. Edit it to add aliases or change names. Back it up before updating the component, as component updates may replace the file.
 - `flags\*.png`: not bundled. [flag-icons](https://github.com/lipis/flag-icons) (MIT) is one source; export its SVGs to PNG and keep its license file.
 
 

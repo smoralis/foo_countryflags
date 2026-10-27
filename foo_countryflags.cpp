@@ -1,15 +1,17 @@
 // foo_countryflags - exposes country flag fields to title formatting.
 //
-// Fields (usable anywhere titleformatting works, e.g. %countryflag_path%):
-//   %countryflag%        flag emoji built from regional indicators (e.g. GR -> 🇬🇷)
-//   %countryflag_path%   full path to <flagdir>\<iso2>.png (only if the file exists)
-//   %countryflag_name%   English country name
-//   %countryflag_iso2%   normalised ISO 3166-1 alpha-2 code, upper case
-//   %countryflag_iso3%   matching ISO 3166-1 alpha-3 code, upper case (e.g. GRC)
-//
-// The country is taken from the first tag in the configured list that holds a
-// value we can recognise (alpha-2, alpha-3 or English name).
-// Preferences > Advanced > Tools > Country flags.
+// Five independently configurable country sources. Each source has a configurable suffix; field names are countryflag_<suffix>_emoji, countryflag_<suffix>_path, etc. The required countryflag_ prefix is always present.
+// Source 1 fields: %countryflag_emoji%, %countryflag_path%, %countryflag_name%,
+//                  %countryflag_iso2%, %countryflag_iso3%
+// Source 2 fields: %countryflag_artist_emoji%, %countryflag_artist_path%,
+//                  %countryflag_artist_name%, %countryflag_artist_iso2%, %countryflag_artist_iso3%
+// Source 3 fields default suffix: 3 (e.g. %countryflag_3_emoji%).
+// Source 4 fields default suffix: 4 (e.g. %countryflag_4_emoji%).
+// Source 5 fields default suffix: 5 (e.g. %countryflag_5_emoji%).
+// Defaults: source 1 = %country%, source 2 = %artistcountry%; sources 3-5 empty.
+// Preferences > Tools > Country Flags.
+// The script must not use the %countryflag_*% fields themselves (re-entrant calls
+// are ignored to prevent infinite recursion).
 //
 // Data file: countries.txt next to the DLL, lines of ISO2|ISO3|Name
 // Flag images: flags\gr.png, flags\us.png, ... next to the DLL (or custom folder).
@@ -18,6 +20,7 @@
 
 #include <foobar2000/SDK/foobar2000.h>
 #include <foobar2000/helpers/helpers.h>
+#include <foobar2000/SDK/coreDarkMode.h>
 
 #include <algorithm>
 #include <filesystem>
@@ -28,233 +31,584 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <windows.h>
+#include <uxtheme.h>
+#pragma comment(lib, "Gdi32.lib")
+#pragma comment(lib, "UxTheme.lib")
+#pragma comment(lib, "Advapi32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.0",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.1",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
 namespace {
 
-namespace fs = std::filesystem;
+    namespace fs = std::filesystem;
 
     const GUID guid_branch = { 0x916ca10, 0x4e9f, 0x45ca, { 0xad, 0x87, 0xc5, 0x4f, 0x1e, 0xcb, 0x8f, 0x46 } };
-    const GUID guid_src = { 0xafdb315d, 0x3d2d, 0x4add, { 0x81, 0xf0, 0x55, 0xbb, 0xeb, 0x27, 0xd9, 0x9d } };
+    const GUID guid_source1_script = { 0x7f6a1021, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x01 } };
+    const GUID guid_source2_script = { 0x7f6a1022, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x02 } };
+    const GUID guid_source3_script = { 0x7f6a1023, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x03 } };
+    const GUID guid_source4_script = { 0x7f6a1024, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x04 } };
+    const GUID guid_source5_script = { 0x7f6a1025, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x05 } };
     const GUID guid_dir = { 0xb46e52be, 0x3476, 0x45b5, { 0x98, 0x4f, 0xff, 0x11, 0xbd, 0x1f, 0x98, 0x8b } };
-											
+    const GUID guid_prefix1 = { 0x7f6a1031, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x11 } };
+    const GUID guid_prefix2 = { 0x7f6a1032, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x12 } };
+    const GUID guid_prefix3 = { 0x7f6a1033, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x13 } };
+    const GUID guid_prefix4 = { 0x7f6a1034, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x14 } };
+    const GUID guid_prefix5 = { 0x7f6a1035, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x15 } };
 
-advconfig_branch_factory g_branch("Country flags", guid_branch, advconfig_entry::guid_branch_tools, 0.0);
-advconfig_string_factory_MT g_cfgSrc("Source tag fields (semicolon-separated, first match wins)",
-    guid_src, guid_branch, 0.0, "COUNTRYCODE;COUNTRY;ARTISTCOUNTRY;RELEASECOUNTRY");
-advconfig_string_factory_MT g_cfgDir("Flag image folder (empty = 'flags' next to component)",
-    guid_dir, guid_branch, 1.0, "");
 
-// --- helpers --------------------------------------------------------------
+    // Settings are now exposed on a dedicated Preferences page (Tools > Country Flags),
+    // not in Advanced Preferences. Reuse the existing GUIDs where possible.
+    cfg_string g_cfgSource1(guid_source1_script, "%country%");
+    cfg_string g_cfgSource2(guid_source2_script, "%artistcountry%");
+    cfg_string g_cfgSource3(guid_source3_script, "");
+    cfg_string g_cfgSource4(guid_source4_script, "");
+    cfg_string g_cfgSource5(guid_source5_script, "");
+    cfg_string g_cfgDir(guid_dir, "");
+    cfg_string g_cfgPrefix1(guid_prefix1, "main");
+    cfg_string g_cfgPrefix2(guid_prefix2, "artist");
+    cfg_string g_cfgPrefix3(guid_prefix3, "3");
+    cfg_string g_cfgPrefix4(guid_prefix4, "4");
+    cfg_string g_cfgPrefix5(guid_prefix5, "5");
 
-std::string trim(const char* s) {
-    std::string r = s ? s : "";
-    auto notspace = [](unsigned char c) { return !isspace(c); };
-    r.erase(r.begin(), std::find_if(r.begin(), r.end(), notspace));
-    r.erase(std::find_if(r.rbegin(), r.rend(), notspace).base(), r.end());
-    return r;
-}
-std::string upper(std::string s) { for (auto& c : s) c = (char)toupper((unsigned char)c); return s; }
-std::string lower(std::string s) { for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
+    // Forward declaration: fieldPrefix() uses trim() before its definition below.
+    std::string trim(const char* s);
 
-fs::path componentDir() {
-    static const fs::path p = fs::u8path(core_api::get_my_full_path()).parent_path();
-    return p;
-}
+    cfg_string* prefixConfig(size_t index) {
+        static cfg_string* configs[] = { &g_cfgPrefix1, &g_cfgPrefix2, &g_cfgPrefix3, &g_cfgPrefix4, &g_cfgPrefix5 };
+        return configs[index];
+    }
 
-std::string toUtf8(const fs::path& p) {
-    pfc::stringcvt::string_utf8_from_wide u(p.wstring().c_str());
-    return std::string(u.get_ptr());
-}
-
-// --- country database -----------------------------------------------------
-
-struct Db {
-    std::unordered_map<std::string, std::string> a2name;   // "GR" -> "Greece"
-    std::unordered_map<std::string, std::string> a3to2;    // "GRC" -> "GR"
-    std::unordered_map<std::string, std::string> a2to3;    // "GR" -> "GRC"
-    std::unordered_map<std::string, std::string> name2to2; // "greece" -> "GR"
-};
-
-const Db& db() {
-    static Db d;
-    static std::once_flag once;
-    std::call_once(once, [] {
-        std::ifstream f(componentDir() / "countries.txt");
-        std::string line;
-        while (std::getline(f, line)) {
-            if (line.size() >= 3 && (unsigned char)line[0] == 0xEF) line.erase(0, 3); // BOM
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            auto p1 = line.find('|');
-            auto p2 = p1 == std::string::npos ? p1 : line.find('|', p1 + 1);
-            if (p2 == std::string::npos) continue;
-            std::string a2 = upper(line.substr(0, p1));
-            std::string a3 = upper(line.substr(p1 + 1, p2 - p1 - 1));
-            std::string nm = line.substr(p2 + 1);
-            d.a2name[a2] = nm;
-            d.a3to2[a3] = a2;
-            d.a2to3[a2] = a3;
-            d.name2to2[lower(nm)] = a2;
+    std::string cleanSuffix(std::string suffix, size_t index) {
+        suffix.erase(std::remove_if(suffix.begin(), suffix.end(), [](unsigned char c) {
+            return !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                (c >= '0' && c <= '9') || c == '_');
+            }), suffix.end());
+        while (!suffix.empty() && suffix.front() == '_') suffix.erase(suffix.begin());
+        while (!suffix.empty() && suffix.back() == '_') suffix.pop_back();
+        // Migrate the previous built-in names to the new defaults.
+        if (index == 2 && (suffix == "country3" || suffix == "suffix3")) suffix = "3";
+        if (index == 3 && (suffix == "country4" || suffix == "suffix4")) suffix = "4";
+        if (index == 4 && (suffix == "country5" || suffix == "suffix5")) suffix = "5";
+        if (suffix.empty()) {
+            static const char* defaults[] = { "main", "artist", "3", "4", "5" };
+            suffix = defaults[index];
         }
-        // common aliases
-        const char* aliases[][2] = {
-            {"united states of america", "US"}, {"czech republic", "CZ"}, {"turkiye", "TR"},
-            {"türkiye", "TR"}, {"burma", "MM"}, {"ivory coast", "CI"}, {"cape verde", "CV"},
-            {"vatican", "VA"}, {"macedonia", "MK"}, {"swaziland", "SZ"}, {"east timor", "TL"},
-            {"russian federation", "RU"}, {"korea", "KR"}, {"great britain", "GB"},
-            {"england", "GB"}, {"scotland", "GB"}, {"wales", "GB"}, {"uk", "GB"},
-            {"holland", "NL"}, {"hellas", "GR"}
+        return suffix;
+    }
+
+    std::string fieldPrefix(size_t index) {
+        // Source 1 preserves the original, unsuffixed public field names.
+        // Sources 2-5 use countryflag_<user suffix>_.
+        if (index == 0) return "countryflag_";
+        const std::string suffix = cleanSuffix(trim(prefixConfig(index)->get()), index);
+        return std::string("countryflag_") + suffix + "_";
+    }
+
+    // --- helpers --------------------------------------------------------------
+
+    std::string trim(const char* s) {
+        std::string r = s ? s : "";
+        auto notspace = [](unsigned char c) { return !isspace(c); };
+        r.erase(r.begin(), std::find_if(r.begin(), r.end(), notspace));
+        r.erase(std::find_if(r.rbegin(), r.rend(), notspace).base(), r.end());
+        return r;
+    }
+    std::string upper(std::string s) { for (auto& c : s) c = (char)toupper((unsigned char)c); return s; }
+    std::string lower(std::string s) { for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
+
+    fs::path componentDir() {
+        static const fs::path p = fs::u8path(core_api::get_my_full_path()).parent_path();
+        return p;
+    }
+
+    std::string toUtf8(const fs::path& p) {
+        pfc::stringcvt::string_utf8_from_wide u(p.wstring().c_str());
+        return std::string(u.get_ptr());
+    }
+
+    // --- country database -----------------------------------------------------
+
+    struct Db {
+        std::unordered_map<std::string, std::string> a2name;   // "GR" -> "Greece"
+        std::unordered_map<std::string, std::string> a3to2;    // "GRC" -> "GR"
+        std::unordered_map<std::string, std::string> a2to3;    // "GR" -> "GRC"
+        std::unordered_map<std::string, std::string> name2to2; // "greece" -> "GR"
+    };
+
+    const Db& db() {
+        static Db d;
+        static std::once_flag once;
+        std::call_once(once, [] {
+            std::ifstream f(componentDir() / "countries.txt");
+            std::string line;
+            while (std::getline(f, line)) {
+                if (line.size() >= 3 && (unsigned char)line[0] == 0xEF) line.erase(0, 3); // BOM
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                auto p1 = line.find('|');
+                auto p2 = p1 == std::string::npos ? p1 : line.find('|', p1 + 1);
+                if (p2 == std::string::npos) continue;
+                std::string a2 = upper(line.substr(0, p1));
+                std::string a3 = upper(line.substr(p1 + 1, p2 - p1 - 1));
+                std::string nm = line.substr(p2 + 1);
+                d.a2name[a2] = nm;
+                d.a3to2[a3] = a2;
+                d.a2to3[a2] = a3;
+                d.name2to2[lower(nm)] = a2;
+            }
+            // common aliases
+            const char* aliases[][2] = {
+                {"united states of america", "US"}, {"czech republic", "CZ"}, {"turkiye", "TR"},
+                {"türkiye", "TR"}, {"burma", "MM"}, {"ivory coast", "CI"}, {"cape verde", "CV"},
+                {"vatican", "VA"}, {"macedonia", "MK"}, {"swaziland", "SZ"}, {"east timor", "TL"},
+                {"russian federation", "RU"}, {"korea", "KR"}, {"great britain", "GB"},
+                {"england", "GB"}, {"scotland", "GB"}, {"wales", "GB"}, {"uk", "GB"},
+                {"holland", "NL"}, {"hellas", "GR"}
+            };
+            for (auto& a : aliases) d.name2to2[a[0]] = a[1];
+            });
+        return d;
+    }
+
+    // Returns upper-case ISO2, or "" if unrecognised.
+    std::string normalize(const char* raw) {
+        std::string s = trim(raw);
+        if (s.empty()) return {};
+        const Db& d = db();
+        std::string up = upper(s);
+        if (up.size() == 2 && d.a2name.count(up)) return up;
+        if (up.size() == 3) {
+            auto it = d.a3to2.find(up);
+            if (it != d.a3to2.end()) return it->second;
+        }
+        auto it = d.name2to2.find(lower(s));
+        return it != d.name2to2.end() ? it->second : std::string();
+    }
+
+    std::string emojiFlag(const std::string& iso2) {
+        // Regional indicator A = U+1F1E6 -> UTF-8 F0 9F 87 A6
+        std::string r;
+        for (char c : iso2) {
+            if (c < 'A' || c > 'Z') return {};
+            r += "\xF0\x9F\x87";
+            r += (char)(0xA6 + (c - 'A'));
+        }
+        return r;
+    }
+
+    // Resolves the flag image path for an ISO2 code. Results are cached per code, so
+    // the filesystem is hit at most once per code instead of once per evaluation.
+    // The cache is cleared when the flag folder setting changes, and every entry
+    // (found or missing) is re-checked after a short delay, so flags added or
+    // removed while running are picked up.
+    std::string flagPath(const std::string& iso2) {
+        using clock = std::chrono::steady_clock;
+        struct Entry { std::string path; clock::time_point checked; };
+
+        static std::mutex m;
+        static bool init = false;
+        static std::string lastDir;
+        static std::unordered_map<std::string, Entry> cache;
+        constexpr auto ttl = std::chrono::seconds(30);
+
+        pfc::string8 custom;
+        const std::string customDir = trim(g_cfgDir.get());
+
+        std::lock_guard<std::mutex> lock(m);
+        if (!init || lastDir != customDir) {
+            cache.clear();
+            lastDir = customDir;
+            init = true;
+        }
+
+        const auto now = clock::now();
+        auto it = cache.find(iso2);
+        if (it != cache.end() && now - it->second.checked < ttl)
+            return it->second.path;
+
+        fs::path dir = customDir.empty() ? componentDir() / "flags" : fs::u8path(customDir);
+
+        fs::path p = dir / (lower(iso2) + ".png");
+        std::error_code ec;
+        std::string result = fs::exists(p, ec) ? toUtf8(p) : std::string();
+        cache[iso2] = Entry{ result, now };
+        return result;
+    }
+
+    // Compiled title formatting script. Recompiled only when the setting string changes.
+    // The cache is heap-allocated and released explicitly on shutdown so no service
+    // pointer is destroyed during static destruction after the core has gone.
+    struct ScriptCache {
+        std::mutex m;
+        std::string raw;
+        titleformat_object::ptr obj;
+        bool init = false;
+    };
+
+    ScriptCache& sourceScriptCache(size_t index) {
+        static ScriptCache* caches[5] = {
+            new ScriptCache, new ScriptCache, new ScriptCache, new ScriptCache, new ScriptCache
         };
-        for (auto& a : aliases) d.name2to2[a[0]] = a[1];
-    });
-    return d;
-}
-
-// Returns upper-case ISO2, or "" if unrecognised.
-std::string normalize(const char* raw) {
-    std::string s = trim(raw);
-    if (s.empty()) return {};
-    const Db& d = db();
-    std::string up = upper(s);
-    if (up.size() == 2 && d.a2name.count(up)) return up;
-    if (up.size() == 3) {
-        auto it = d.a3to2.find(up);
-        if (it != d.a3to2.end()) return it->second;
-    }
-    auto it = d.name2to2.find(lower(s));
-    return it != d.name2to2.end() ? it->second : std::string();
-}
-
-std::string emojiFlag(const std::string& iso2) {
-    // Regional indicator A = U+1F1E6 -> UTF-8 F0 9F 87 A6
-    std::string r;
-    for (char c : iso2) {
-        if (c < 'A' || c > 'Z') return {};
-        r += "\xF0\x9F\x87";
-        r += (char)(0xA6 + (c - 'A'));
-    }
-    return r;
-}
-
-// Resolves the flag image path for an ISO2 code. Results are cached per code, so
-// the filesystem is hit at most once per code instead of once per evaluation.
-// The cache is cleared when the flag folder setting changes, and every entry
-// (found or missing) is re-checked after a short delay, so flags added or
-// removed while running are picked up.
-std::string flagPath(const std::string& iso2) {
-    using clock = std::chrono::steady_clock;
-    struct Entry { std::string path; clock::time_point checked; };
-
-    static std::mutex m;
-    static bool init = false;
-    static std::string lastDir;
-    static std::unordered_map<std::string, Entry> cache;
-    constexpr auto ttl = std::chrono::seconds(30);
-
-    pfc::string8 custom;
-    g_cfgDir.get(custom);
-    const std::string customDir = trim(custom.c_str());
-
-    std::lock_guard<std::mutex> lock(m);
-    if (!init || lastDir != customDir) {
-        cache.clear();
-        lastDir = customDir;
-        init = true;
+        return *caches[index];
     }
 
-    const auto now = clock::now();
-    auto it = cache.find(iso2);
-    if (it != cache.end() && now - it->second.checked < ttl)
-        return it->second.path;
+    cfg_string* sourceConfig(size_t index) {
+        static cfg_string* configs[5] = {
+            &g_cfgSource1, &g_cfgSource2, &g_cfgSource3, &g_cfgSource4, &g_cfgSource5
+        };
+        return configs[index];
+    }
 
-    fs::path dir = customDir.empty() ? componentDir() / "flags" : fs::u8path(customDir);
-											   
-    fs::path p = dir / (lower(iso2) + ".png");
-    std::error_code ec;
-    std::string result = fs::exists(p, ec) ? toUtf8(p) : std::string();
-    cache[iso2] = Entry{ result, now };
-    return result;
-}
+    titleformat_object::ptr compiledScript(size_t index) {
+        const char* src = sourceConfig(index)->get();
+        if (src == nullptr) src = "";
 
-// Parsed source tag list. Re-parsed only when the setting string changes; callers
-// get a shared, immutable snapshot so no copying or locking happens while iterating.
-std::shared_ptr<const std::vector<std::string>> sourceFields() {
-    static std::mutex m;
-    static std::string lastRaw;
-    static std::shared_ptr<const std::vector<std::string>> parsed;
+        ScriptCache& c = sourceScriptCache(index);
+        std::lock_guard<std::mutex> lock(c.m);
+        if (!c.init || c.raw != src) {
+            titleformat_object::ptr obj;
+            titleformat_compiler::get()->compile_safe(obj, src);
+            c.obj = obj;
+            c.raw = src;
+            c.init = true;
+        }
+        return c.obj;
+    }
 
-    pfc::string8 src;
-    g_cfgSrc.get(src);
+    class quit_cleanup : public initquit {
+    public:
+        void on_quit() override {
+            for (size_t i = 0; i < 5; ++i) {
+                ScriptCache& c = sourceScriptCache(i);
+                std::lock_guard<std::mutex> lock(c.m);
+                c.obj.release();
+                c.init = false;
+            }
+        }
+    };
+    initquit_factory_t<quit_cleanup> g_quit_cleanup;
 
-    std::lock_guard<std::mutex> lock(m);
-    if (!parsed || lastRaw != src.c_str()) {
-        auto v = std::make_shared<std::vector<std::string>>();
-        const std::string list = src.c_str();
+    // Resolve countries using only the selected source (artist-country or track-country).
+    // A source may contain a list such as "Greece, Cyprus"; each recognised item is returned.
+    std::vector<std::string> countriesOf(metadb_handle* h, size_t sourceIndex) {
+        // The scripts must not use this component's own fields: that would recurse.
+        thread_local bool inside = false;
+        if (inside) return {};
+        struct Guard {
+            bool& f;
+            explicit Guard(bool& x) : f(x) { f = true; }
+            ~Guard() { f = false; }
+        } guard(inside);
+
+        std::vector<std::string> countries;
+        titleformat_object::ptr script = compiledScript(sourceIndex);
+        if (script.is_empty()) return countries;
+
+        pfc::string8 result;
+        h->format_title(nullptr, result, script, nullptr);
+        const std::string whole = trim(result.c_str());
+        if (whole.empty()) return countries;
+
         size_t pos = 0;
-        while (pos <= list.size()) {
-            size_t end = list.find(';', pos);
-            if (end == std::string::npos) end = list.size();
-            std::string field = trim(list.substr(pos, end - pos).c_str());
+        while (pos <= whole.size()) {
+            size_t end = whole.find_first_of(",;/", pos);
+            if (end == std::string::npos) end = whole.size();
+            const std::string piece = trim(whole.substr(pos, end - pos).c_str());
+            const std::string iso = normalize(piece.c_str());
+            if (!iso.empty()) countries.push_back(iso);
+            if (end == whole.size()) break;
             pos = end + 1;
-            if (!field.empty()) v->push_back(std::move(field));
         }
-        lastRaw = src.c_str();
-        parsed = std::move(v);
+        return countries;
     }
-    return parsed;
-}
 
-// Find the country for a track using the configured tag list.
-std::string countryOf(metadb_handle* h) {
-    metadb_info_container::ptr c;
-    if (!h->get_info_ref(c)) return {};
-    const file_info& fi = c->info();
+    // --- dedicated Preferences page -------------------------------------------
 
-    const auto fields = sourceFields();
-    for (const std::string& field : *fields) {
-        const size_t n = fi.meta_get_count_by_name(field.c_str());
-        for (size_t i = 0; i < n; ++i) {
-            std::string iso = normalize(fi.meta_get(field.c_str(), i));
-            if (!iso.empty()) return iso;
+    const GUID guid_country_flags_preferences = {
+        0x5e8c71a2, 0x9f24, 0x4a01, { 0x91, 0x62, 0x2b, 0x7e, 0x51, 0x0a, 0x44, 0x30 }
+    };
+
+    constexpr int ID_SOURCE1 = 1001;
+    constexpr int ID_SOURCE2 = 1002;
+    constexpr int ID_SOURCE3 = 1003;
+    constexpr int ID_SOURCE4 = 1004;
+    constexpr int ID_SOURCE5 = 1005;
+    constexpr int ID_FLAG_DIR = 1006;
+    constexpr int ID_PREFIX1 = 1007;
+    constexpr int ID_PREFIX2 = 1008;
+    constexpr int ID_PREFIX3 = 1009;
+    constexpr int ID_PREFIX4 = 1010;
+    constexpr int ID_PREFIX5 = 1011;
+
+    class country_flags_preferences_instance : public preferences_page_instance {
+    public:
+        country_flags_preferences_instance(HWND parent, preferences_page_callback::ptr callback)
+            : m_callback(callback) {
+            WNDCLASSW wc{};
+            wc.lpfnWndProc = WindowProc;
+            wc.hInstance = core_api::get_my_instance();
+            wc.lpszClassName = L"CountryFlagsPreferencesPage";
+            wc.hCursor = LoadCursor(nullptr, IDC_ARROW);
+            wc.hbrBackground = nullptr;
+            RegisterClassW(&wc);
+
+            m_wnd = CreateWindowExW(0, wc.lpszClassName, L"", WS_CHILD | WS_VISIBLE,
+                0, 0, 640, 580, parent, nullptr, wc.hInstance, this);
+            if (m_wnd) {
+                createControls();
+                loadValues(false);
+                // Use foobar2000's own theme state and update hooks, not the Windows
+                // AppsUseLightTheme registry value (which can differ from foobar2000).
+                m_darkMode.AddDialogWithControls(m_wnd);
+            }
         }
-    }
-    return {};
-}
 
-// --- field provider -------------------------------------------------------
+        ~country_flags_preferences_instance() = default;
 
-class flag_fields : public metadb_display_field_provider {
-public:
-    t_uint32 get_field_count() override { return 5; }
-
-    void get_field_name(t_uint32 index, pfc::string_base& out) override {
-        static const char* names[] = { "countryflag_emoji", "countryflag_path",
-                                       "countryflag_name", "countryflag_iso2",
-                                       "countryflag_iso3" };
-        out.set_string(names[index]);
-    }
-
-    bool process_field(t_uint32 index, metadb_handle* handle, titleformat_text_out* out) override {
-        const std::string iso = countryOf(handle);
-        if (iso.empty()) return false;
-
-        std::string value;
-        switch (index) {
-        case 0: value = emojiFlag(iso); break;
-        case 1: value = flagPath(iso); break;
-        case 2: { auto it = db().a2name.find(iso); if (it != db().a2name.end()) value = it->second; break; }
-        case 3: value = iso; break;
-        case 4: { auto it = db().a2to3.find(iso); if (it != db().a2to3.end()) value = it->second; break; }
+        t_uint32 get_state() override {
+            t_uint32 state = preferences_state::resettable | preferences_state::dark_mode_supported;
+            if (m_wnd && hasChanges()) state |= preferences_state::changed;
+            return state;
         }
-        if (value.empty()) return false;
-        out->write(titleformat_inputtypes::meta, value.c_str(), value.length());
-        return true;
-    }
-};
 
-service_factory_single_t<flag_fields> g_flag_fields;
+        fb2k::hwnd_t get_wnd() override { return m_wnd; }
+
+        void apply() override {
+            if (!m_wnd) return;
+            saveEdit(ID_SOURCE1, g_cfgSource1);
+            saveEdit(ID_SOURCE2, g_cfgSource2);
+            saveEdit(ID_SOURCE3, g_cfgSource3);
+            saveEdit(ID_SOURCE4, g_cfgSource4);
+            saveEdit(ID_SOURCE5, g_cfgSource5);
+            saveEdit(ID_FLAG_DIR, g_cfgDir);
+            // Source 1 has fixed legacy field names without a suffix. Sources 2-5
+            // require a suffix; blank/invalid-only values fall back to defaults.
+            const int prefixIDs[] = { ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
+            for (size_t i = 0; i < 4; ++i) {
+                const std::string suffix = cleanSuffix(readEdit(prefixIDs[i]), i + 1);
+                pfc::stringcvt::string_wide_from_utf8 wide(suffix.c_str());
+                SetWindowTextW(GetDlgItem(m_wnd, prefixIDs[i]), wide.get_ptr());
+            }
+            saveEdit(ID_PREFIX2, g_cfgPrefix2);
+            saveEdit(ID_PREFIX3, g_cfgPrefix3);
+            saveEdit(ID_PREFIX4, g_cfgPrefix4);
+            saveEdit(ID_PREFIX5, g_cfgPrefix5);
+            captureOriginals();
+            if (m_callback.is_valid()) m_callback->on_state_changed();
+        }
+
+        void reset() override {
+            if (!m_wnd) return;
+            setEdit(ID_SOURCE1, "%country%");
+            setEdit(ID_SOURCE2, "%artistcountry%");
+            setEdit(ID_SOURCE3, "");
+            setEdit(ID_SOURCE4, "");
+            setEdit(ID_SOURCE5, "");
+            setEdit(ID_FLAG_DIR, "");
+            setEdit(ID_PREFIX1, "(fixed — no suffix)");
+            setEdit(ID_PREFIX2, "artist");
+            setEdit(ID_PREFIX3, "3");
+            setEdit(ID_PREFIX4, "4");
+            setEdit(ID_PREFIX5, "5");
+            if (m_callback.is_valid()) m_callback->on_state_changed();
+        }
+
+    private:
+        static LRESULT CALLBACK WindowProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+            country_flags_preferences_instance* self =
+                reinterpret_cast<country_flags_preferences_instance*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
+            if (msg == WM_NCCREATE) {
+                auto cs = reinterpret_cast<CREATESTRUCTW*>(lp);
+                self = static_cast<country_flags_preferences_instance*>(cs->lpCreateParams);
+                SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            }
+            if (self) return self->handleMessage(wnd, msg, wp, lp);
+            return DefWindowProcW(wnd, msg, wp, lp);
+        }
+
+        LRESULT handleMessage(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+            // STATIC label controls otherwise paint an opaque light background on
+            // some Windows/foobar2000 theme combinations. Make their background
+            // transparent so the core dark-mode dialog background shows through.
+            if (msg == WM_CTLCOLORSTATIC) {
+                HDC hdc = reinterpret_cast<HDC>(wp);
+                SetBkMode(hdc, TRANSPARENT);
+                return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
+            }
+            if (msg == WM_COMMAND && HIWORD(wp) == EN_CHANGE) {
+                if (m_callback.is_valid()) m_callback->on_state_changed();
+            }
+            if (msg == WM_SIZE) layoutControls(LOWORD(lp), HIWORD(lp));
+            if (msg == WM_THEMECHANGED || msg == WM_SYSCOLORCHANGE || msg == WM_SETTINGCHANGE) {
+                InvalidateRect(wnd, nullptr, TRUE);
+                EnumChildWindows(wnd, [](HWND child, LPARAM) -> BOOL { InvalidateRect(child, nullptr, TRUE); return TRUE; }, 0);
+            }
+            if (msg == WM_DESTROY) m_wnd = nullptr;
+            return DefWindowProcW(wnd, msg, wp, lp);
+        }
+
+        void createControls() {
+            HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+            auto addLabel = [&](const wchar_t* text, int y) {
+                HWND c = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
+                    12, y, 600, 18, m_wnd, nullptr, core_api::get_my_instance(), nullptr);
+                SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                };
+            auto addEdit = [&](int id, int y) {
+                HWND c = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+                    12, y, 600, 22, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                    core_api::get_my_instance(), nullptr);
+                SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                };
+            // Each source is presented as one group: script followed by its field prefix.
+            const wchar_t* sourceTitles[] = { L"Source 1", L"Source 2", L"Source 3", L"Source 4", L"Source 5" };
+            const wchar_t* scriptLabels[] = { L"Title-formatting script", L"Title-formatting script", L"Title-formatting script", L"Title-formatting script", L"Title-formatting script" };
+            const int scriptIDs[] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5 };
+            const int prefixIDs[] = { ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
+            const wchar_t* defaultPrefixes[] = { L"Fixed base fields (no suffix: countryflag_emoji, countryflag_path, etc.)", L"Required suffix (e.g. artist; do not enter countryflag_)", L"Required suffix (e.g. 3; do not enter countryflag_)", L"Required suffix (e.g. 4; do not enter countryflag_)", L"Required suffix (e.g. 5; do not enter countryflag_)" };
+            int y = 8;
+            for (int i = 0; i < 5; ++i) {
+                addLabel(sourceTitles[i], y); y += 17;
+                addLabel(scriptLabels[i], y); y += 16;
+                addEdit(scriptIDs[i], y); y += 23;
+                addLabel(defaultPrefixes[i], y); y += 16;
+                addEdit(prefixIDs[i], y); y += 23;
+                if (i == 0) {
+                    SetWindowTextW(GetDlgItem(m_wnd, prefixIDs[i]), L"(fixed — no suffix)");
+                    EnableWindow(GetDlgItem(m_wnd, prefixIDs[i]), FALSE);
+                }
+            }
+            addLabel(L"Note: Changes to suffixes require restarting foobar2000 to update available fields.", y); y += 20;
+            addLabel(L"Flag image folder (empty = component's flags folder)", y); y += 18;
+            addEdit(ID_FLAG_DIR, y);
+            layoutControls(640, 600);
+        }
+
+        void layoutControls(int width, int) {
+            if (!m_wnd) return;
+            const int controlW = (std::max)(100, width - 24);
+            HWND child = GetWindow(m_wnd, GW_CHILD);
+            while (child) {
+                RECT rc{};
+                GetWindowRect(child, &rc);
+                MapWindowPoints(nullptr, m_wnd, reinterpret_cast<POINT*>(&rc), 2);
+                MoveWindow(child, 12, rc.top, controlW, rc.bottom - rc.top, TRUE);
+                child = GetWindow(child, GW_HWNDNEXT);
+            }
+        }
+
+        std::string readEdit(int id) const {
+            HWND edit = GetDlgItem(m_wnd, id);
+            const int len = GetWindowTextLengthW(edit);
+            std::wstring wide(static_cast<size_t>(len) + 1, L'\0');
+            GetWindowTextW(edit, wide.data(), len + 1);
+            wide.resize(len);
+            pfc::stringcvt::string_utf8_from_wide utf8(wide.c_str());
+            return std::string(utf8.get_ptr());
+        }
+
+        void setEdit(int id, const char* value) {
+            pfc::stringcvt::string_wide_from_utf8 wide(value);
+            SetWindowTextW(GetDlgItem(m_wnd, id), wide.get_ptr());
+        }
+
+        void saveEdit(int id, cfg_string& cfg) {
+            const std::string value = readEdit(id);
+            cfg = value.c_str();
+        }
+
+        void loadValues(bool defaults) {
+            if (defaults) { reset(); return; }
+            setEdit(ID_SOURCE1, g_cfgSource1.get());
+            setEdit(ID_SOURCE2, g_cfgSource2.get());
+            setEdit(ID_SOURCE3, g_cfgSource3.get());
+            setEdit(ID_SOURCE4, g_cfgSource4.get());
+            setEdit(ID_SOURCE5, g_cfgSource5.get());
+            setEdit(ID_FLAG_DIR, g_cfgDir.get());
+            setEdit(ID_PREFIX1, "(fixed — no suffix)");
+            setEdit(ID_PREFIX2, cleanSuffix(trim(g_cfgPrefix2.get()), 1).c_str());
+            setEdit(ID_PREFIX3, cleanSuffix(trim(g_cfgPrefix3.get()), 2).c_str());
+            setEdit(ID_PREFIX4, cleanSuffix(trim(g_cfgPrefix4.get()), 3).c_str());
+            setEdit(ID_PREFIX5, cleanSuffix(trim(g_cfgPrefix5.get()), 4).c_str());
+            captureOriginals();
+        }
+
+        void captureOriginals() {
+            for (int id : { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5, ID_FLAG_DIR, ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 })
+                m_original[id] = readEdit(id);
+        }
+
+        bool hasChanges() const {
+            for (int id : { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5, ID_FLAG_DIR, ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 }) {
+                const auto it = m_original.find(id);
+                if (it == m_original.end() || it->second != readEdit(id)) return true;
+            }
+            return false;
+        }
+
+        HWND m_wnd = nullptr;
+        fb2k::CCoreDarkModeHooks m_darkMode;
+        preferences_page_callback::ptr m_callback;
+        std::unordered_map<int, std::string> m_original;
+    };
+
+    class country_flags_preferences_page : public preferences_page_v3 {
+    public:
+        const char* get_name() override { return "Country Flags"; }
+        GUID get_guid() override { return guid_country_flags_preferences; }
+        GUID get_parent_guid() override { return preferences_page::guid_tools; }
+        preferences_page_instance::ptr instantiate(fb2k::hwnd_t parent, preferences_page_callback::ptr callback) override {
+            // Wrap the implementation in service_impl_t so service_base's
+            // reference-counting and service-query methods are supplied by the SDK.
+            return new service_impl_t<country_flags_preferences_instance>(reinterpret_cast<HWND>(parent), callback);
+        }
+    };
+    preferences_page_factory_t<country_flags_preferences_page> g_country_flags_preferences_page;
+
+    // --- field provider -------------------------------------------------------
+
+    class flag_fields : public metadb_display_field_provider {
+    public:
+        t_uint32 get_field_count() override { return 25; }
+
+        void get_field_name(t_uint32 index, pfc::string_base& out) override {
+            if (index >= 25) { out.reset(); return; }
+            static const char* suffixes[] = { "emoji", "path", "name", "iso2", "iso3" };
+            const std::string prefix = fieldPrefix(index / 5);
+            if (prefix.empty()) { out.set_string(""); return; }
+            const std::string name = prefix + suffixes[index % 5];
+            out.set_string(name.c_str());
+        }
+
+        bool process_field(t_uint32 index, metadb_handle* handle, titleformat_text_out* out) override {
+            const size_t sourceIndex = index / 5;
+            const t_uint32 kind = index % 5;
+            const std::vector<std::string> countries = countriesOf(handle, sourceIndex);
+            if (countries.empty()) return false;
+
+            std::string value;
+            const char* separator = kind == 0 ? " " : "; ";
+            for (const auto& iso : countries) {
+                std::string part;
+                switch (kind) {
+                case 0: part = emojiFlag(iso); break;
+                case 1: part = flagPath(iso); break;
+                case 2: { auto it = db().a2name.find(iso); if (it != db().a2name.end()) part = it->second; break; }
+                case 3: part = iso; break;
+                case 4: { auto it = db().a2to3.find(iso); if (it != db().a2to3.end()) part = it->second; break; }
+                }
+                if (part.empty()) continue;
+                if (!value.empty()) value += separator;
+                value += part;
+            }
+            if (value.empty()) return false;
+            out->write(titleformat_inputtypes::meta, value.c_str(), value.length());
+            return true;
+        }
+    };
+    service_factory_single_t<flag_fields> g_flag_fields;
 
 } // namespace
