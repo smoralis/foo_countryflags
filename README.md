@@ -43,7 +43,7 @@ Preferences > Advanced > Tools > Country flags
 
 1. Install `foo_countryflags.fb2k-component` via Preferences > Components > Install, or double-click it.
 2. Restart foobar2000.
-3. Make sure `countries.txt` and a `flags` folder containing PNG images named by lowercase ISO2 code (`gr.png`, `us.png`, ...) sit next to the DLL:
+3. Make sure `countries.txt` and a `flags` folder (optional) containing PNG images named by lowercase ISO2 code (`gr.png`, `us.png`, ...) sit next to the DLL:
    - 64-bit foobar2000: `user-components-x64\foo_countryflags\`
    - 32-bit foobar2000: `user-components\foo_countryflags\`
 
