@@ -8,7 +8,13 @@
 // Source 3 fields default suffix: 3 (e.g. %countryflag_3_emoji%).
 // Source 4 fields default suffix: 4 (e.g. %countryflag_4_emoji%).
 // Source 5 fields default suffix: 5 (e.g. %countryflag_5_emoji%).
-// Defaults: source 1 = %country%, source 2 = %artistcountry%; sources 3-5 empty.
+// Defaults: source 1 = %country%, source 2 = $if2(%artistcountry%,%countryflag_lookup%); sources 3-5 empty.
+// Extra field: %countryflag_lookup% = ISO2 code(s) of the artist found in artist_countries.json
+//   (next to the DLL; flat JSON {"artist name": "CC"}, case-insensitive, reloaded when changed).
+//   For the playing stream, the dynamic (ICY) artist is searched first.
+//   The file location can be set in preferences (empty = next to the DLL).
+//   A second table, worldMap.json ([{"artist": "...", "val": [..., "Country"]}]; the last
+//   item of val is the country), is searched for artists missing from the first.
 // Preferences > Tools > Country Flags.
 // The script must not use the %countryflag_*% fields themselves (re-entrant calls
 // are ignored to prevent infinite recursion).
@@ -29,6 +35,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <chrono>
 #include <memory>
 #include <mutex>
@@ -43,7 +50,7 @@
 #pragma comment(lib, "Advapi32.lib")
 #pragma comment(lib, "Ole32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.2",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.3",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
@@ -57,6 +64,8 @@ namespace {
     const GUID guid_source3_script = { 0x7f6a1023, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x03 } };
     const GUID guid_source4_script = { 0x7f6a1024, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x04 } };
     const GUID guid_source5_script = { 0x7f6a1025, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x05 } };
+    const GUID guid_artist_file = { 0x3c1d8e47, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xc3 } };
+    const GUID guid_artist_file2 = { 0x3c1d8e48, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xc4 } };
     const GUID guid_dir = { 0xb46e52be, 0x3476, 0x45b5, { 0x98, 0x4f, 0xff, 0x11, 0xbd, 0x1f, 0x98, 0x8b } };
     const GUID guid_prefix1 = { 0x7f6a1031, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x11 } };
     const GUID guid_prefix2 = { 0x7f6a1032, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x12 } };
@@ -68,11 +77,13 @@ namespace {
     // Settings are now exposed on a dedicated Preferences page (Tools > Country Flags),
     // not in Advanced Preferences. Reuse the existing GUIDs where possible.
     cfg_string g_cfgSource1(guid_source1_script, "%country%");
-    cfg_string g_cfgSource2(guid_source2_script, "%artistcountry%");
+    cfg_string g_cfgSource2(guid_source2_script, "$if2(%artistcountry%,%countryflag_lookup%)");
     cfg_string g_cfgSource3(guid_source3_script, "");
     cfg_string g_cfgSource4(guid_source4_script, "");
     cfg_string g_cfgSource5(guid_source5_script, "");
     cfg_string g_cfgDir(guid_dir, "");
+    cfg_string g_cfgArtistFile(guid_artist_file, "");
+    cfg_string g_cfgArtistFile2(guid_artist_file2, "");
     cfg_string g_cfgPrefix1(guid_prefix1, "main");
     cfg_string g_cfgPrefix2(guid_prefix2, "artist");
     cfg_string g_cfgPrefix3(guid_prefix3, "3");
@@ -268,6 +279,380 @@ namespace {
         return result;
     }
 
+    // --- artist lookup table --------------------------------------------------
+    // artist_countries.json (next to the DLL) is a flat JSON object mapping an artist name
+    // to a country, e.g. {"abba": "SE", "aftermath": "US-NJ"}. Names are matched
+    // case-insensitively; a region suffix ("US-NJ") is ignored and "XE" means Europe.
+    // The file is re-read automatically (checked every few seconds) when it changes.
+
+    using ArtistMap = std::unordered_map<std::string, std::string>;
+
+    std::wstring widenUtf8(const std::string& s) {
+        if (s.empty()) return {};
+        const int n = MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), nullptr, 0);
+        if (n <= 0) return {};
+        std::wstring w((size_t)n, L'\0');
+        MultiByteToWideChar(CP_UTF8, 0, s.data(), (int)s.size(), &w[0], n);
+        return w;
+    }
+
+    std::string narrowUtf8(const std::wstring& w) {
+        if (w.empty()) return {};
+        const int n = WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), nullptr, 0, nullptr, nullptr);
+        if (n <= 0) return {};
+        std::string s((size_t)n, '\0');
+        WideCharToMultiByte(CP_UTF8, 0, w.data(), (int)w.size(), &s[0], n, nullptr, nullptr);
+        return s;
+    }
+
+    // Case-folded (Unicode-aware), trimmed key used for both the table and the names looked up.
+    std::string lookupKey(const std::string& s) {
+        std::wstring w = widenUtf8(s);
+        if (w.empty()) return {};
+        std::wstring lowered(w.size(), L'\0');
+        const int n = LCMapStringEx(LOCALE_NAME_INVARIANT, LCMAP_LOWERCASE, w.c_str(), (int)w.size(),
+            &lowered[0], (int)lowered.size(), nullptr, nullptr, 0);
+        if (n > 0) { lowered.resize((size_t)n); w = lowered; }
+        auto isSpace = [](wchar_t c) { return c == L' ' || c == L'\t' || c == L'\r' || c == L'\n' || c == 0xA0; };
+        size_t b = 0, e = w.size();
+        while (b < e && isSpace(w[b])) ++b;
+        while (e > b && isSpace(w[e - 1])) --e;
+        return narrowUtf8(w.substr(b, e - b));
+    }
+
+    void appendUtf8(std::string& s, unsigned cp) {
+        if (cp < 0x80) s += (char)cp;
+        else if (cp < 0x800) { s += (char)(0xC0 | (cp >> 6)); s += (char)(0x80 | (cp & 0x3F)); }
+        else if (cp < 0x10000) { s += (char)(0xE0 | (cp >> 12)); s += (char)(0x80 | ((cp >> 6) & 0x3F)); s += (char)(0x80 | (cp & 0x3F)); }
+        else { s += (char)(0xF0 | (cp >> 18)); s += (char)(0x80 | ((cp >> 12) & 0x3F)); s += (char)(0x80 | ((cp >> 6) & 0x3F)); s += (char)(0x80 | (cp & 0x3F)); }
+    }
+
+    // Minimal JSON reader (UTF-8, optional BOM) for the two supported table formats.
+    struct JsonCursor {
+        const std::string& t;
+        size_t i = 0;
+        explicit JsonCursor(const std::string& text) : t(text) {
+            if (t.size() >= 3 && (unsigned char)t[0] == 0xEF && (unsigned char)t[1] == 0xBB && (unsigned char)t[2] == 0xBF) i = 3;
+        }
+        void skipWs() { while (i < t.size() && (t[i] == ' ' || t[i] == '\t' || t[i] == '\r' || t[i] == '\n')) ++i; }
+        bool peek(char c) { skipWs(); return i < t.size() && t[i] == c; }
+        bool eat(char c) { if (!peek(c)) return false; ++i; return true; }
+        bool hex4(unsigned& v) {
+            if (i + 4 > t.size()) return false;
+            v = 0;
+            for (int k = 0; k < 4; ++k) {
+                const char c = t[i + k];
+                v <<= 4;
+                if (c >= '0' && c <= '9') v |= (unsigned)(c - '0');
+                else if (c >= 'a' && c <= 'f') v |= (unsigned)(c - 'a' + 10);
+                else if (c >= 'A' && c <= 'F') v |= (unsigned)(c - 'A' + 10);
+                else return false;
+            }
+            i += 4;
+            return true;
+        }
+        bool readString(std::string& str) {
+            skipWs();
+            if (i >= t.size() || t[i] != '"') return false;
+            ++i;
+            str.clear();
+            while (i < t.size()) {
+                const char c = t[i++];
+                if (c == '"') return true;
+                if (c != '\\') { str += c; continue; }
+                if (i >= t.size()) return false;
+                const char e = t[i++];
+                switch (e) {
+                case '"': str += '"'; break;
+                case '\\': str += '\\'; break;
+                case '/': str += '/'; break;
+                case 'b': str += '\b'; break;
+                case 'f': str += '\f'; break;
+                case 'n': str += '\n'; break;
+                case 'r': str += '\r'; break;
+                case 't': str += '\t'; break;
+                case 'u': {
+                    unsigned cp = 0;
+                    if (!hex4(cp)) return false;
+                    if (cp >= 0xD800 && cp < 0xDC00 && i + 1 < t.size() && t[i] == '\\' && t[i + 1] == 'u') {
+                        const size_t save = i;
+                        i += 2;
+                        unsigned lo = 0;
+                        if (hex4(lo) && lo >= 0xDC00 && lo < 0xE000) cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
+                        else i = save;
+                    }
+                    appendUtf8(str, cp);
+                    break;
+                }
+                default: return false;
+                }
+            }
+            return false;
+        }
+        // Skips any JSON value (used for keys we do not care about).
+        bool skipValue(int depth = 0) {
+            if (depth > 32) return false;
+            skipWs();
+            if (i >= t.size()) return false;
+            const char c = t[i];
+            if (c == '"') { std::string tmp; return readString(tmp); }
+            if (c == '[' || c == '{') {
+                const char close = c == '[' ? ']' : '}';
+                ++i;
+                if (eat(close)) return true;
+                for (;;) {
+                    if (c == '{') {
+                        std::string key;
+                        if (!readString(key) || !eat(':')) return false;
+                    }
+                    if (!skipValue(depth + 1)) return false;
+                    if (eat(',')) continue;
+                    return eat(close);
+                }
+            }
+            const size_t start = i;   // number / true / false / null
+            while (i < t.size() && t[i] != ',' && t[i] != ']' && t[i] != '}' && t[i] != ' ' && t[i] != '\t' && t[i] != '\r' && t[i] != '\n') ++i;
+            return i > start;
+        }
+    };
+
+    // Format 1: flat object {"artist name": "country", ...}.
+    bool parseFlatJsonObject(const std::string& text, std::vector<std::pair<std::string, std::string>>& out) {
+        JsonCursor c(text);
+        if (!c.eat('{')) return false;
+        for (;;) {
+            if (c.eat('}')) return true;
+            std::string k, v;
+            if (!c.readString(k) || !c.eat(':') || !c.readString(v)) return false;
+            out.emplace_back(std::move(k), std::move(v));
+            c.eat(',');
+        }
+    }
+
+    // Format 2: array [{"artist": "name", "val": ["city", ..., "Country"]}, ...].
+    // The country is the LAST item of val; other keys are ignored.
+    bool parseArtistValJson(const std::string& text, std::vector<std::pair<std::string, std::string>>& out) {
+        JsonCursor c(text);
+        if (!c.eat('[')) return false;
+        for (;;) {
+            if (c.eat(']')) return true;
+            if (!c.eat('{')) return false;
+            std::string artist, country;
+            if (!c.eat('}')) {
+                for (;;) {
+                    std::string key;
+                    if (!c.readString(key) || !c.eat(':')) return false;
+                    if (key == "artist") {
+                        if (!c.readString(artist)) return false;
+                    } else if (key == "val") {
+                        if (!c.eat('[')) return false;
+                        if (!c.eat(']')) {
+                            for (;;) {
+                                std::string item;
+                                if (!c.readString(item)) return false;
+                                country = item;               // keep the last item
+                                if (c.eat(',')) continue;
+                                if (!c.eat(']')) return false;
+                                break;
+                            }
+                        }
+                    } else if (!c.skipValue()) {
+                        return false;
+                    }
+                    if (c.eat(',')) continue;
+                    if (!c.eat('}')) return false;
+                    break;
+                }
+            }
+            if (!artist.empty() && !country.empty()) out.emplace_back(std::move(artist), std::move(country));
+            c.eat(',');
+        }
+    }
+
+    struct ArtistTable {
+        std::mutex m;
+        std::shared_ptr<const ArtistMap> map;
+        fs::file_time_type stamp{};
+        bool haveStamp = false;
+        std::chrono::steady_clock::time_point checked{};
+        std::string path;   // configured location the table was loaded from ("" = default)
+    };
+
+    // Returns the current table (never null). Cheap: the file timestamp is checked at most
+    // every 5 seconds and the table is only re-parsed when the timestamp changes, or at once
+    // when the configured location changes. arrayFormat selects the file format:
+    // false = flat {"artist": "country"}, true = [{"artist": ..., "val": [..., "country"]}].
+    std::shared_ptr<const ArtistMap> loadArtistTable(ArtistTable& t, const std::string& custom,
+        const char* defaultFile, bool arrayFormat) {
+        using clock = std::chrono::steady_clock;
+        std::lock_guard<std::mutex> lock(t.m);
+        if (t.path != custom) {            // location changed in preferences: reload now
+            t.path = custom;
+            t.map.reset();
+            t.haveStamp = false;
+        }
+        const auto now = clock::now();
+        if (t.map && now - t.checked < std::chrono::seconds(5)) return t.map;
+        t.checked = now;
+
+        std::error_code ec;
+        const fs::path p = custom.empty() ? componentDir() / defaultFile : fs::path(widenUtf8(custom));
+        const auto stamp = fs::last_write_time(p, ec);
+        if (ec) {
+            // Missing file: no lookups.
+            t.map = std::make_shared<const ArtistMap>();
+            t.haveStamp = false;
+            return t.map;
+        }
+        if (t.map && t.haveStamp && stamp == t.stamp) return t.map;
+
+        t.stamp = stamp;
+        t.haveStamp = true;
+        std::ifstream f(p, std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        std::vector<std::pair<std::string, std::string>> pairs;
+        const bool ok = arrayFormat ? parseArtistValJson(text, pairs) : parseFlatJsonObject(text, pairs);
+        if (!ok) {
+            // Unreadable/invalid file: keep the previous table if there is one.
+            if (!t.map) t.map = std::make_shared<const ArtistMap>();
+            return t.map;
+        }
+        auto m = std::make_shared<ArtistMap>();
+        m->reserve(pairs.size());
+        for (auto& kv : pairs) {
+            const std::string key = lookupKey(kv.first);
+            if (key.empty()) continue;
+            // Flat table: "US-NJ" -> "US". Array table: country names, which may contain '-'
+            // ("Guinea-Bissau"), are used whole.
+            const std::string country = arrayFormat ? kv.second : kv.second.substr(0, kv.second.find('-'));
+            const std::string iso = normalize(country.c_str());
+            if (iso.empty()) continue;
+            if (arrayFormat) m->emplace(key, iso);   // first entry for an artist wins
+            else (*m)[key] = iso;
+        }
+        t.map = m;
+        return t.map;
+    }
+
+    // Table 1: artist_countries.json (flat). Table 2: worldMap.json (array, country = last item of val).
+    std::shared_ptr<const ArtistMap> artistMap() {
+        static ArtistTable t;
+        return loadArtistTable(t, trim(g_cfgArtistFile.get()), "artist_countries.json", false);
+    }
+
+    std::shared_ptr<const ArtistMap> artistMap2() {
+        static ArtistTable t;
+        return loadArtistTable(t, trim(g_cfgArtistFile2.get()), "worldMap.json", true);
+    }
+
+    // Finds one artist name, also trying "The Cult" <-> "Cult, The".
+    const std::string* findArtist(const ArtistMap& m, const std::string& name) {
+        const std::string key = lookupKey(name);
+        if (key.empty()) return nullptr;
+        auto it = m.find(key);
+        if (it != m.end()) return &it->second;
+
+        std::string base;
+        if (key.size() > 4 && key.compare(0, 4, "the ") == 0) base = key.substr(4);
+        else if (key.size() > 5 && key.compare(key.size() - 5, 5, ", the") == 0) base = key.substr(0, key.size() - 5);
+        if (base.empty()) return nullptr;
+        for (const std::string& variant : { base + ", the", std::string("the ") + base, base }) {
+            it = m.find(variant);
+            if (it != m.end()) return &it->second;
+        }
+        return nullptr;
+    }
+
+    // Artist(s) from the playing stream's dynamic metadata (e.g. ICY StreamTitle), which is
+    // not part of the static tags of the track. Captured via play callbacks so no playback
+    // call is needed from whatever thread evaluates the field. Heap-allocated and released
+    // on quit (it holds a service pointer).
+    struct DynamicArtists {
+        std::mutex m;
+        metadb_handle_ptr track;
+        std::vector<std::string> artists;
+    };
+
+    DynamicArtists& dynamicArtists() {
+        static DynamicArtists* d = new DynamicArtists;
+        return *d;
+    }
+
+    class dynamic_artist_callback : public play_callback_static {
+    public:
+        unsigned get_flags() override {
+            return flag_on_playback_new_track | flag_on_playback_stop | flag_on_playback_dynamic_info_track;
+        }
+        void on_playback_new_track(metadb_handle_ptr p_track) override {
+            DynamicArtists& d = dynamicArtists();
+            std::lock_guard<std::mutex> lock(d.m);
+            d.track = p_track;
+            d.artists.clear();
+        }
+        void on_playback_stop(play_control::t_stop_reason) override {
+            DynamicArtists& d = dynamicArtists();
+            std::lock_guard<std::mutex> lock(d.m);
+            d.track.release();
+            d.artists.clear();
+        }
+        void on_playback_dynamic_info_track(const file_info& p_info) override {
+            std::vector<std::string> artists;
+            const t_size idx = p_info.meta_find("artist");
+            if (idx != pfc_infinite) {
+                const t_size count = p_info.meta_enum_value_count(idx);
+                for (t_size k = 0; k < count; ++k) artists.emplace_back(p_info.meta_enum_value(idx, k));
+            }
+            DynamicArtists& d = dynamicArtists();
+            std::lock_guard<std::mutex> lock(d.m);
+            d.artists = std::move(artists);
+        }
+        void on_playback_starting(play_control::t_track_command, bool) override {}
+        void on_playback_seek(double) override {}
+        void on_playback_pause(bool) override {}
+        void on_playback_edited(metadb_handle_ptr) override {}
+        void on_playback_dynamic_info(const file_info&) override {}
+        void on_playback_time(double) override {}
+        void on_volume_change(float) override {}
+    };
+    play_callback_static_factory_t<dynamic_artist_callback> g_dynamic_artist_callback;
+
+    // Looks up the artist(s) of a track: first the dynamic stream artist (only for the
+    // playing track), then every "artist" value of its tags, then "album artist".
+    std::vector<std::string> artistLookupCountries(metadb_handle* h) {
+        std::vector<std::string> countries;
+        const auto map = artistMap();
+        const auto map2 = artistMap2();
+        if ((!map || map->empty()) && (!map2 || map2->empty())) return countries;
+        auto add = [&](const std::string& name) {
+            // Table 1 first; table 2 only for artists missing from table 1.
+            const std::string* iso = map ? findArtist(*map, name) : nullptr;
+            if (!iso && map2) iso = findArtist(*map2, name);
+            if (iso && std::find(countries.begin(), countries.end(), *iso) == countries.end())
+                countries.push_back(*iso);
+            };
+
+        std::vector<std::string> dynamic;
+        {
+            DynamicArtists& d = dynamicArtists();
+            std::lock_guard<std::mutex> lock(d.m);
+            if (d.track.is_valid() && d.track.get_ptr() == h) dynamic = d.artists;
+        }
+        for (const auto& name : dynamic) add(name);
+        if (!countries.empty()) return countries;
+
+        metadb_info_container::ptr ref;
+        if (!h->get_info_ref(ref) || ref.is_empty()) return countries;
+        const file_info& info = ref->info();
+        for (const char* field : { "artist", "album artist" }) {
+            const t_size idx = info.meta_find(field);
+            if (idx == pfc_infinite) continue;
+            const t_size count = info.meta_enum_value_count(idx);
+            for (t_size k = 0; k < count; ++k) add(std::string(info.meta_enum_value(idx, k)));
+            if (!countries.empty()) break;
+        }
+        return countries;
+    }
+
     // Compiled title formatting script. Recompiled only when the setting string changes.
     // The cache is heap-allocated and released explicitly on shutdown so no service
     // pointer is destroyed during static destruction after the core has gone.
@@ -317,6 +702,10 @@ namespace {
                 c.obj.release();
                 c.init = false;
             }
+            DynamicArtists& d = dynamicArtists();
+            std::lock_guard<std::mutex> lock(d.m);
+            d.track.release();
+            d.artists.clear();
         }
     };
     initquit_factory_t<quit_cleanup> g_quit_cleanup;
@@ -374,6 +763,10 @@ namespace {
     constexpr int ID_PREFIX4 = 1010;
     constexpr int ID_PREFIX5 = 1011;
     constexpr int ID_BROWSE = 1012;
+    constexpr int ID_ARTIST_FILE = 1013;
+    constexpr int ID_ARTIST_BROWSE = 1014;
+    constexpr int ID_ARTIST2_FILE = 1015;
+    constexpr int ID_ARTIST2_BROWSE = 1016;
     constexpr const char* kFixedText = "(fixed - no suffix)";
 
     class country_flags_preferences_instance : public preferences_page_instance {
@@ -417,6 +810,8 @@ namespace {
             saveEdit(ID_SOURCE4, g_cfgSource4);
             saveEdit(ID_SOURCE5, g_cfgSource5);
             saveEdit(ID_FLAG_DIR, g_cfgDir);
+            saveEdit(ID_ARTIST_FILE, g_cfgArtistFile);
+            saveEdit(ID_ARTIST2_FILE, g_cfgArtistFile2);
             // Source 1 has fixed legacy field names without a suffix. Sources 2-5
             // require a suffix; blank/invalid-only values fall back to defaults.
             const int prefixIDs[] = { ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
@@ -436,11 +831,13 @@ namespace {
         void reset() override {
             if (!m_wnd) return;
             setEdit(ID_SOURCE1, "%country%");
-            setEdit(ID_SOURCE2, "%artistcountry%");
+            setEdit(ID_SOURCE2, "$if2(%artistcountry%,%countryflag_lookup%)");
             setEdit(ID_SOURCE3, "");
             setEdit(ID_SOURCE4, "");
             setEdit(ID_SOURCE5, "");
             setEdit(ID_FLAG_DIR, "");
+            setEdit(ID_ARTIST_FILE, "");
+            setEdit(ID_ARTIST2_FILE, "");
             setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, "artist");
             setEdit(ID_PREFIX3, "3");
@@ -473,6 +870,14 @@ namespace {
             }
             if (msg == WM_COMMAND && LOWORD(wp) == ID_BROWSE && HIWORD(wp) == BN_CLICKED) {
                 browseForFlagFolder();
+                return 0;
+            }
+            if (msg == WM_COMMAND && LOWORD(wp) == ID_ARTIST_BROWSE && HIWORD(wp) == BN_CLICKED) {
+                browseForArtistFile(ID_ARTIST_FILE);
+                return 0;
+            }
+            if (msg == WM_COMMAND && LOWORD(wp) == ID_ARTIST2_BROWSE && HIWORD(wp) == BN_CLICKED) {
+                browseForArtistFile(ID_ARTIST2_FILE);
                 return 0;
             }
             if (msg == WM_COMMAND && HIWORD(wp) == EN_CHANGE) {
@@ -521,8 +926,8 @@ namespace {
             setEdit(ID_PREFIX1, kFixedText);
             EnableWindow(GetDlgItem(m_wnd, ID_PREFIX1), FALSE);
 
-            m_note = addLabel(L"Source 1 uses the fixed fields %countryflag_emoji%, %countryflag_path%, ...\n"
-                L"Sources 2-5 use %countryflag_<suffix>_emoji% etc.: enter only the suffix, not \"countryflag_\".\n"
+            m_note = addLabel(L"Source 1 uses the fixed fields %countryflag_emoji%, %countryflag_path%, ... "
+                L"Sources 2-5 use %countryflag_<suffix>_emoji% etc.: enter only the suffix, not \"countryflag_\". "
                 L"Restart foobar2000 after changing a suffix.");
             m_flagLabel = addLabel(L"Flag image folder (empty = component's flags folder)");
             addEdit(ID_FLAG_DIR);
@@ -530,6 +935,20 @@ namespace {
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 0, 0, 10, 10, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_BROWSE)), inst, nullptr);
             SendMessageW(browse, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+
+            m_artistLabel = addLabel(L"Artist table 1, artist_countries.json: {\"artist\": \"CC\"} (empty = next to the component)");
+            addEdit(ID_ARTIST_FILE);
+            HWND browseArtist = CreateWindowExW(0, L"BUTTON", L"Browse...",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ARTIST_BROWSE)), inst, nullptr);
+            SendMessageW(browseArtist, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+
+            m_artist2Label = addLabel(L"Artist table 2, worldMap.json: last item of val = country (empty = next to the component)");
+            addEdit(ID_ARTIST2_FILE);
+            HWND browseArtist2 = CreateWindowExW(0, L"BUTTON", L"Browse...",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ARTIST2_BROWSE)), inst, nullptr);
+            SendMessageW(browseArtist2, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
             layoutControls(640, 300);
         }
 
@@ -566,6 +985,16 @@ namespace {
             y += 19;
             place(GetDlgItem(m_wnd, ID_FLAG_DIR), margin, y, (std::max)(60, fullW - browseW - gap), rowH);
             place(GetDlgItem(m_wnd, ID_BROWSE), margin + (std::max)(60, fullW - browseW - gap) + gap, y, browseW, rowH);
+            y += rowH + 12;
+            place(m_artistLabel, margin, y, fullW, 16);
+            y += 19;
+            place(GetDlgItem(m_wnd, ID_ARTIST_FILE), margin, y, (std::max)(60, fullW - browseW - gap), rowH);
+            place(GetDlgItem(m_wnd, ID_ARTIST_BROWSE), margin + (std::max)(60, fullW - browseW - gap) + gap, y, browseW, rowH);
+            y += rowH + 12;
+            place(m_artist2Label, margin, y, fullW, 16);
+            y += 19;
+            place(GetDlgItem(m_wnd, ID_ARTIST2_FILE), margin, y, (std::max)(60, fullW - browseW - gap), rowH);
+            place(GetDlgItem(m_wnd, ID_ARTIST2_BROWSE), margin + (std::max)(60, fullW - browseW - gap) + gap, y, browseW, rowH);
 
             // Labels are drawn with a transparent background; repaint parent and children
             // together so moved/resized labels never overpaint their old text.
@@ -606,6 +1035,47 @@ namespace {
             dlg->Release();
         }
 
+        void browseForArtistFile(int editId) {
+            IFileOpenDialog* dlg = nullptr;
+            if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))) || !dlg)
+                return;
+            DWORD opts = 0;
+            dlg->GetOptions(&opts);
+            dlg->SetOptions(opts | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
+            dlg->SetTitle(L"Select artist table (JSON)");
+            const COMDLG_FILTERSPEC filters[] = { { L"JSON files (*.json)", L"*.json" }, { L"All files (*.*)", L"*.*" } };
+            dlg->SetFileTypes(2, filters);
+            dlg->SetDefaultExtension(L"json");
+
+            // Start in the folder of the currently entered file, if any.
+            const std::string current = trim(readEdit(editId).c_str());
+            if (!current.empty()) {
+                pfc::stringcvt::string_wide_from_utf8 wcur(current.c_str());
+                const fs::path cur(wcur.get_ptr());
+                const std::wstring parent = cur.parent_path().wstring();
+                IShellItem* folder = nullptr;
+                if (!parent.empty() && SUCCEEDED(SHCreateItemFromParsingName(parent.c_str(), nullptr, IID_PPV_ARGS(&folder))) && folder) {
+                    dlg->SetFolder(folder);
+                    folder->Release();
+                }
+                const std::wstring name = cur.filename().wstring();
+                if (!name.empty()) dlg->SetFileName(name.c_str());
+            }
+
+            if (SUCCEEDED(dlg->Show(m_wnd))) {
+                IShellItem* item = nullptr;
+                if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+                    PWSTR path = nullptr;
+                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                        SetWindowTextW(GetDlgItem(m_wnd, editId), path);
+                        CoTaskMemFree(path);
+                    }
+                    item->Release();
+                }
+            }
+            dlg->Release();
+        }
+
         std::string readEdit(int id) const {
             HWND edit = GetDlgItem(m_wnd, id);
             const int len = GetWindowTextLengthW(edit);
@@ -634,6 +1104,8 @@ namespace {
             setEdit(ID_SOURCE4, g_cfgSource4.get());
             setEdit(ID_SOURCE5, g_cfgSource5.get());
             setEdit(ID_FLAG_DIR, g_cfgDir.get());
+            setEdit(ID_ARTIST_FILE, g_cfgArtistFile.get());
+            setEdit(ID_ARTIST2_FILE, g_cfgArtistFile2.get());
             setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, cleanSuffix(trim(g_cfgPrefix2.get()), 1).c_str());
             setEdit(ID_PREFIX3, cleanSuffix(trim(g_cfgPrefix3.get()), 2).c_str());
@@ -643,12 +1115,12 @@ namespace {
         }
 
         void captureOriginals() {
-            for (int id : { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5, ID_FLAG_DIR, ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 })
+            for (int id : { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5, ID_FLAG_DIR, ID_ARTIST_FILE, ID_ARTIST2_FILE, ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 })
                 m_original[id] = readEdit(id);
         }
 
         bool hasChanges() const {
-            for (int id : { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5, ID_FLAG_DIR, ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 }) {
+            for (int id : { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5, ID_FLAG_DIR, ID_ARTIST_FILE, ID_ARTIST2_FILE, ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 }) {
                 const auto it = m_original.find(id);
                 if (it == m_original.end() || it->second != readEdit(id)) return true;
             }
@@ -656,7 +1128,7 @@ namespace {
         }
 
         HWND m_wnd = nullptr;
-        HWND m_hdrScript = nullptr, m_hdrSuffix = nullptr, m_note = nullptr, m_flagLabel = nullptr;
+        HWND m_hdrScript = nullptr, m_hdrSuffix = nullptr, m_note = nullptr, m_flagLabel = nullptr, m_artistLabel = nullptr, m_artist2Label = nullptr;
         HWND m_rowLabel[5] = {};
         fb2k::CCoreDarkModeHooks m_darkMode;
         preferences_page_callback::ptr m_callback;
@@ -680,10 +1152,12 @@ namespace {
 
     class flag_fields : public metadb_display_field_provider {
     public:
-        t_uint32 get_field_count() override { return 25; }
+        // 25 source fields (5 sources x 5 kinds) + %countryflag_lookup%.
+        t_uint32 get_field_count() override { return 26; }
 
         void get_field_name(t_uint32 index, pfc::string_base& out) override {
-            if (index >= 25) { out.reset(); return; }
+            if (index == 25) { out.set_string("countryflag_lookup"); return; }
+            if (index > 25) { out.reset(); return; }
             static const char* suffixes[] = { "emoji", "path", "name", "iso2", "iso3" };
             const std::string prefix = fieldPrefix(index / 5);
             if (prefix.empty()) { out.set_string(""); return; }
@@ -692,6 +1166,17 @@ namespace {
         }
 
         bool process_field(t_uint32 index, metadb_handle* handle, titleformat_text_out* out) override {
+            if (index == 25) {
+                // ISO2 code(s) of the artist(s) found in artist_countries.json, for use in source scripts.
+                std::string value;
+                for (const auto& iso : artistLookupCountries(handle)) {
+                    if (!value.empty()) value += "; ";
+                    value += iso;
+                }
+                if (value.empty()) return false;
+                out->write(titleformat_inputtypes::meta, value.c_str(), value.length());
+                return true;
+            }
             const size_t sourceIndex = index / 5;
             const t_uint32 kind = index % 5;
             const std::vector<std::string> countries = countriesOf(handle, sourceIndex);
