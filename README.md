@@ -144,8 +144,8 @@ var img = path ? gdi.Image(path) : null;
 ## Data files
 
 - `countries.txt`: one country per line in the format `ISO2|ISO3|Name`. It follows ISO 3166-1 and also includes Kosovo using the user-assigned code `XKX`. Edit it to add aliases or change names. Back it up before updating the component, as component updates may replace the file.
-- `artist_countries.json`: optional artist-name to country table (see [Artist lookup table](#artist-lookup-table)); a sample with about 4,300 artists is included in the zip.
-- `worldMap.json`: optional second artist table (see [Second table](#second-table-worldmapjson)); a sample with about 4,100 artists is included in the zip.
+- `artist_countries.json`: optional artist-name to country table (see [Artist lookup table](#artist-lookup-table))
+- `worldMap.json`: optional second artist table (see [Second table](#second-table-worldmapjson))
 - `flags\*.png`: not bundled. [flag-icons](https://github.com/lipis/flag-icons) (MIT) is one source; export its SVGs to PNG and keep its license file.
 
 
