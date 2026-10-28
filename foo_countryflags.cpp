@@ -14,9 +14,13 @@
 // are ignored to prevent infinite recursion).
 //
 // Data file: countries.txt next to the DLL, lines of ISO2|ISO3|Name
+// Built in (no data-file entry needed): XE/EU = Europe, XW = Worldwide.
+//   XE is folded into EU; XW emits a globe emoji and looks for flags\xw.png.
 // Flag images: flags\gr.png, flags\us.png, ... next to the DLL (or custom folder).
 //
 // Build: VS2022, x64, C++17, link foobar2000_SDK, foobar2000_component_client, pfc.
+// NOTE: keep this file pure ASCII (use \u / \x escapes). MSVC reads BOM-less
+// sources in the ANSI code page unless /utf-8 is set, which garbles literals.
 
 #include <foobar2000/SDK/foobar2000.h>
 #include <foobar2000/helpers/helpers.h>
@@ -33,11 +37,13 @@
 #include <unordered_map>
 #include <windows.h>
 #include <uxtheme.h>
+#include <shobjidl.h>
 #pragma comment(lib, "Gdi32.lib")
 #pragma comment(lib, "UxTheme.lib")
 #pragma comment(lib, "Advapi32.lib")
+#pragma comment(lib, "Ole32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.1",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.2",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
@@ -158,14 +164,27 @@ namespace {
                 d.a2to3[a2] = a3;
                 d.name2to2[lower(nm)] = a2;
             }
+            // Built-in non-ISO entries (only added if countries.txt does not define them).
+            // XE is the MusicBrainz code for Europe and is folded into EU in normalize().
+            auto addBuiltin = [&](const char* a2, const char* a3, const char* nm) {
+                if (d.a2name.count(a2)) return;
+                d.a2name[a2] = nm;
+                d.a2to3[a2] = a3;
+                d.a3to2.emplace(a3, a2);
+                d.name2to2.emplace(lower(nm), a2);
+            };
+            addBuiltin("EU", "EUR", "Europe");
+            addBuiltin("XW", "XWW", "Worldwide");
+
             // common aliases
             const char* aliases[][2] = {
                 {"united states of america", "US"}, {"czech republic", "CZ"}, {"turkiye", "TR"},
-                {"türkiye", "TR"}, {"burma", "MM"}, {"ivory coast", "CI"}, {"cape verde", "CV"},
+                {"t\xC3\xBC" "rkiye", "TR"}, {"burma", "MM"}, {"ivory coast", "CI"}, {"cape verde", "CV"},
                 {"vatican", "VA"}, {"macedonia", "MK"}, {"swaziland", "SZ"}, {"east timor", "TL"},
                 {"russian federation", "RU"}, {"korea", "KR"}, {"great britain", "GB"},
                 {"england", "GB"}, {"scotland", "GB"}, {"wales", "GB"}, {"uk", "GB"},
-                {"holland", "NL"}, {"hellas", "GR"}
+                {"holland", "NL"}, {"hellas", "GR"},
+                {"european union", "EU"}, {"world", "XW"}
             };
             for (auto& a : aliases) d.name2to2[a[0]] = a[1];
             });
@@ -175,9 +194,12 @@ namespace {
     // Returns upper-case ISO2, or "" if unrecognised.
     std::string normalize(const char* raw) {
         std::string s = trim(raw);
+        // MusicBrainz style "[Europe]" / "[Worldwide]".
+        if (s.size() >= 2 && s.front() == '[' && s.back() == ']') s = trim(s.substr(1, s.size() - 2).c_str());
         if (s.empty()) return {};
         const Db& d = db();
         std::string up = upper(s);
+        if (up == "XE") return "EU";
         if (up.size() == 2 && d.a2name.count(up)) return up;
         if (up.size() == 3) {
             auto it = d.a3to2.find(up);
@@ -188,6 +210,8 @@ namespace {
     }
 
     std::string emojiFlag(const std::string& iso2) {
+        // "Worldwide" has no flag: use the globe-with-meridians emoji (U+1F310).
+        if (iso2 == "XW") return "\xF0\x9F\x8C\x90";
         // Regional indicator A = U+1F1E6 -> UTF-8 F0 9F 87 A6
         std::string r;
         for (char c : iso2) {
@@ -230,9 +254,16 @@ namespace {
 
         fs::path dir = customDir.empty() ? componentDir() / "flags" : fs::u8path(customDir);
 
-        fs::path p = dir / (lower(iso2) + ".png");
+        // Europe is stored as EU; also accept a flag file named xe.png.
+        std::vector<std::string> stems{ lower(iso2) };
+        if (iso2 == "EU") stems.push_back("xe");
+
         std::error_code ec;
-        std::string result = fs::exists(p, ec) ? toUtf8(p) : std::string();
+        std::string result;
+        for (const auto& stem : stems) {
+            fs::path p = dir / (stem + ".png");
+            if (fs::exists(p, ec)) { result = toUtf8(p); break; }
+        }
         cache[iso2] = Entry{ result, now };
         return result;
     }
@@ -317,7 +348,8 @@ namespace {
             if (end == std::string::npos) end = whole.size();
             const std::string piece = trim(whole.substr(pos, end - pos).c_str());
             const std::string iso = normalize(piece.c_str());
-            if (!iso.empty()) countries.push_back(iso);
+            if (!iso.empty() && std::find(countries.begin(), countries.end(), iso) == countries.end())
+                countries.push_back(iso);
             if (end == whole.size()) break;
             pos = end + 1;
         }
@@ -341,6 +373,8 @@ namespace {
     constexpr int ID_PREFIX3 = 1009;
     constexpr int ID_PREFIX4 = 1010;
     constexpr int ID_PREFIX5 = 1011;
+    constexpr int ID_BROWSE = 1012;
+    constexpr const char* kFixedText = "(fixed - no suffix)";
 
     class country_flags_preferences_instance : public preferences_page_instance {
     public:
@@ -407,7 +441,7 @@ namespace {
             setEdit(ID_SOURCE4, "");
             setEdit(ID_SOURCE5, "");
             setEdit(ID_FLAG_DIR, "");
-            setEdit(ID_PREFIX1, "(fixed — no suffix)");
+            setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, "artist");
             setEdit(ID_PREFIX3, "3");
             setEdit(ID_PREFIX4, "4");
@@ -437,6 +471,10 @@ namespace {
                 SetBkMode(hdc, TRANSPARENT);
                 return reinterpret_cast<LRESULT>(GetStockObject(NULL_BRUSH));
             }
+            if (msg == WM_COMMAND && LOWORD(wp) == ID_BROWSE && HIWORD(wp) == BN_CLICKED) {
+                browseForFlagFolder();
+                return 0;
+            }
             if (msg == WM_COMMAND && HIWORD(wp) == EN_CHANGE) {
                 if (m_callback.is_valid()) m_callback->on_state_changed();
             }
@@ -451,53 +489,121 @@ namespace {
 
         void createControls() {
             HFONT font = reinterpret_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-            auto addLabel = [&](const wchar_t* text, int y) {
-                HWND c = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE,
-                    12, y, 600, 18, m_wnd, nullptr, core_api::get_my_instance(), nullptr);
+            const HINSTANCE inst = core_api::get_my_instance();
+            auto addLabel = [&](const wchar_t* text) {
+                // SS_NOPREFIX: never treat '&' in label text as an accelerator marker.
+                HWND c = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+                    0, 0, 10, 10, m_wnd, nullptr, inst, nullptr);
                 SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                return c;
                 };
-            auto addEdit = [&](int id, int y) {
+            auto addEdit = [&](int id) {
                 HWND c = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                     WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-                    12, y, 600, 22, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
-                    core_api::get_my_instance(), nullptr);
+                    0, 0, 10, 10, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), inst, nullptr);
                 SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+                return c;
                 };
-            // Each source is presented as one group: script followed by its field prefix.
+
+            // Two columns per source: title-formatting script | field suffix.
+            m_hdrScript = addLabel(L"Title-formatting script");
+            m_hdrSuffix = addLabel(L"Field suffix");
+
             const wchar_t* sourceTitles[] = { L"Source 1", L"Source 2", L"Source 3", L"Source 4", L"Source 5" };
-            const wchar_t* scriptLabels[] = { L"Title-formatting script", L"Title-formatting script", L"Title-formatting script", L"Title-formatting script", L"Title-formatting script" };
             const int scriptIDs[] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5 };
             const int prefixIDs[] = { ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
-            const wchar_t* defaultPrefixes[] = { L"Fixed base fields (no suffix: countryflag_emoji, countryflag_path, etc.)", L"Required suffix (e.g. artist; do not enter countryflag_)", L"Required suffix (e.g. 3; do not enter countryflag_)", L"Required suffix (e.g. 4; do not enter countryflag_)", L"Required suffix (e.g. 5; do not enter countryflag_)" };
-            int y = 8;
             for (int i = 0; i < 5; ++i) {
-                addLabel(sourceTitles[i], y); y += 17;
-                addLabel(scriptLabels[i], y); y += 16;
-                addEdit(scriptIDs[i], y); y += 23;
-                addLabel(defaultPrefixes[i], y); y += 16;
-                addEdit(prefixIDs[i], y); y += 23;
-                if (i == 0) {
-                    SetWindowTextW(GetDlgItem(m_wnd, prefixIDs[i]), L"(fixed — no suffix)");
-                    EnableWindow(GetDlgItem(m_wnd, prefixIDs[i]), FALSE);
-                }
+                m_rowLabel[i] = addLabel(sourceTitles[i]);
+                addEdit(scriptIDs[i]);
+                addEdit(prefixIDs[i]);
             }
-            addLabel(L"Note: Changes to suffixes require restarting foobar2000 to update available fields.", y); y += 20;
-            addLabel(L"Flag image folder (empty = component's flags folder)", y); y += 18;
-            addEdit(ID_FLAG_DIR, y);
-            layoutControls(640, 600);
+            // Source 1 keeps the original unsuffixed field names.
+            setEdit(ID_PREFIX1, kFixedText);
+            EnableWindow(GetDlgItem(m_wnd, ID_PREFIX1), FALSE);
+
+            m_note = addLabel(L"Source 1 uses the fixed fields %countryflag_emoji%, %countryflag_path%, ...\n"
+                L"Sources 2-5 use %countryflag_<suffix>_emoji% etc.: enter only the suffix, not \"countryflag_\".\n"
+                L"Restart foobar2000 after changing a suffix.");
+            m_flagLabel = addLabel(L"Flag image folder (empty = component's flags folder)");
+            addEdit(ID_FLAG_DIR);
+            HWND browse = CreateWindowExW(0, L"BUTTON", L"Browse...",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_BROWSE)), inst, nullptr);
+            SendMessageW(browse, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
+            layoutControls(640, 300);
         }
 
         void layoutControls(int width, int) {
             if (!m_wnd) return;
-            const int controlW = (std::max)(100, width - 24);
-            HWND child = GetWindow(m_wnd, GW_CHILD);
-            while (child) {
-                RECT rc{};
-                GetWindowRect(child, &rc);
-                MapWindowPoints(nullptr, m_wnd, reinterpret_cast<POINT*>(&rc), 2);
-                MoveWindow(child, 12, rc.top, controlW, rc.bottom - rc.top, TRUE);
-                child = GetWindow(child, GW_HWNDNEXT);
+            const int margin = 12, gap = 8, labelW = 56, rowH = 28, rowStep = 34, browseW = 90;
+            const int fullW = (std::max)(100, width - 2 * margin);
+            const int suffixW = (std::min)(180, (std::max)(90, width / 4));
+            const int xLabel = margin;
+            const int xScript = xLabel + labelW + gap;
+            const int scriptW = (std::max)(80, width - margin - suffixW - gap - xScript);
+            const int xSuffix = xScript + scriptW + gap;
+
+            auto place = [&](HWND h, int x, int y, int w, int hgt) {
+                if (h) SetWindowPos(h, nullptr, x, y, w, hgt, SWP_NOZORDER | SWP_NOACTIVATE);
+                };
+            const int scriptIDs[] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5 };
+            const int prefixIDs[] = { ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
+
+            int y = 10;
+            place(m_hdrScript, xScript, y, scriptW, 16);
+            place(m_hdrSuffix, xSuffix, y, suffixW, 16);
+            y += 19;
+            for (int i = 0; i < 5; ++i) {
+                place(m_rowLabel[i], xLabel, y + 6, labelW, 16);
+                place(GetDlgItem(m_wnd, scriptIDs[i]), xScript, y, scriptW, rowH);
+                place(GetDlgItem(m_wnd, prefixIDs[i]), xSuffix, y, suffixW, rowH);
+                y += rowStep;
             }
+            y += 6;
+            place(m_note, margin, y, fullW, 48);
+            y += 54;
+            place(m_flagLabel, margin, y, fullW, 16);
+            y += 19;
+            place(GetDlgItem(m_wnd, ID_FLAG_DIR), margin, y, (std::max)(60, fullW - browseW - gap), rowH);
+            place(GetDlgItem(m_wnd, ID_BROWSE), margin + (std::max)(60, fullW - browseW - gap) + gap, y, browseW, rowH);
+
+            // Labels are drawn with a transparent background; repaint parent and children
+            // together so moved/resized labels never overpaint their old text.
+            RedrawWindow(m_wnd, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN);
+        }
+
+        void browseForFlagFolder() {
+            IFileOpenDialog* dlg = nullptr;
+            if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))) || !dlg)
+                return;
+            DWORD opts = 0;
+            dlg->GetOptions(&opts);
+            dlg->SetOptions(opts | FOS_PICKFOLDERS | FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST);
+            dlg->SetTitle(L"Select flag image folder");
+
+            // Start in the currently entered folder, if it exists.
+            const std::string current = trim(readEdit(ID_FLAG_DIR).c_str());
+            if (!current.empty()) {
+                pfc::stringcvt::string_wide_from_utf8 wcur(current.c_str());
+                IShellItem* folder = nullptr;
+                if (SUCCEEDED(SHCreateItemFromParsingName(wcur.get_ptr(), nullptr, IID_PPV_ARGS(&folder))) && folder) {
+                    dlg->SetFolder(folder);
+                    folder->Release();
+                }
+            }
+
+            if (SUCCEEDED(dlg->Show(m_wnd))) {
+                IShellItem* item = nullptr;
+                if (SUCCEEDED(dlg->GetResult(&item)) && item) {
+                    PWSTR path = nullptr;
+                    if (SUCCEEDED(item->GetDisplayName(SIGDN_FILESYSPATH, &path)) && path) {
+                        SetWindowTextW(GetDlgItem(m_wnd, ID_FLAG_DIR), path);
+                        CoTaskMemFree(path);
+                    }
+                    item->Release();
+                }
+            }
+            dlg->Release();
         }
 
         std::string readEdit(int id) const {
@@ -528,7 +634,7 @@ namespace {
             setEdit(ID_SOURCE4, g_cfgSource4.get());
             setEdit(ID_SOURCE5, g_cfgSource5.get());
             setEdit(ID_FLAG_DIR, g_cfgDir.get());
-            setEdit(ID_PREFIX1, "(fixed — no suffix)");
+            setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, cleanSuffix(trim(g_cfgPrefix2.get()), 1).c_str());
             setEdit(ID_PREFIX3, cleanSuffix(trim(g_cfgPrefix3.get()), 2).c_str());
             setEdit(ID_PREFIX4, cleanSuffix(trim(g_cfgPrefix4.get()), 3).c_str());
@@ -550,6 +656,8 @@ namespace {
         }
 
         HWND m_wnd = nullptr;
+        HWND m_hdrScript = nullptr, m_hdrSuffix = nullptr, m_note = nullptr, m_flagLabel = nullptr;
+        HWND m_rowLabel[5] = {};
         fb2k::CCoreDarkModeHooks m_darkMode;
         preferences_page_callback::ptr m_callback;
         std::unordered_map<int, std::string> m_original;

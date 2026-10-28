@@ -26,7 +26,7 @@ If no country can be determined for a source, that source's fields are empty, so
 
 ### Source suffixes
 
-Open **Preferences > Tools > Country Flags** to configure each source's title-formatting script and suffix.
+Open **Preferences > Tools > Country Flags** to configure each source's title-formatting script and suffix. Each source is one row with two columns: the title-formatting script on the left and the field suffix on the right. The flag image folder has a **Browse...** button.
 
 - **Source 1** keeps the original, unsuffixed field names (`%countryflag_emoji%`, `%countryflag_path%`, etc.). Its field names are fixed.
 - **Sources 2–5** use the required `countryflag_` prefix plus the suffix entered by the user. Enter only the suffix value; do not type `countryflag_`.
@@ -37,7 +37,42 @@ Open **Preferences > Tools > Country Flags** to configure each source's title-fo
 
 ## How a country value is interpreted
 
-A source script should return a country alpha-2 code (`GR`), alpha-3 code (`GRC`) or English name (`Greece`). Common aliases such as `UK`, `Czech Republic` and `Russian Federation` are also understood.
+A source script should return a country alpha-2 code (`GR`), alpha-3 code (`GRC`) or English name (`Greece`). Common aliases such as `UK`, `Czech Republic` and `Russian Federation` are also understood. MusicBrainz-style bracketed values such as `[Europe]` and `[Worldwide]` work too.
+
+### Built-in aliases
+
+These alternative names are built in and are matched case-insensitively, in addition to the names in `countries.txt`. Add more by editing `countries.txt` (for example by adding a line with the alias as the name).
+
+| Alias | Resolves to | `iso2` |
+|---|---|---|
+| `United States of America` | United States | `US` |
+| `Czech Republic` | Czechia | `CZ` |
+| `Turkiye`, `Türkiye` | Turkey | `TR` |
+| `Burma` | Myanmar | `MM` |
+| `Ivory Coast` | Côte d'Ivoire | `CI` |
+| `Cape Verde` | Cabo Verde | `CV` |
+| `Vatican` | Vatican City | `VA` |
+| `Macedonia` | North Macedonia | `MK` |
+| `Swaziland` | Eswatini | `SZ` |
+| `East Timor` | Timor-Leste | `TL` |
+| `Russian Federation` | Russia | `RU` |
+| `Korea` | South Korea | `KR` |
+| `Great Britain`, `UK`, `England`, `Scotland`, `Wales` | United Kingdom | `GB` |
+| `Holland` | Netherlands | `NL` |
+| `Hellas` | Greece | `GR` |
+| `European Union`, `Europe`, `XE` | Europe | `EU` |
+| `World`, `Worldwide` | Worldwide | `XW` |
+
+### Europe and Worldwide (built in)
+
+These non-ISO values are built in, so they work even with an unmodified `countries.txt` (an entry in that file takes precedence):
+
+| Input | `iso2` | `iso3` | `name` | `emoji` | `path` |
+|---|---|---|---|---|---|
+| `XE`, `EU`, `Europe`, `European Union` | `EU` | `EUR` | Europe | European Union flag | `flags\eu.png`, or `flags\xe.png` if that is missing |
+| `XW`, `Worldwide`, `World` | `XW` | `XWW` | Worldwide | Globe (U+1F310) | `flags\xw.png` |
+
+`XE` is folded into `EU`, so `XE/EU` in one tag yields a single Europe entry rather than two.
 
 ## Installation
 
@@ -66,7 +101,7 @@ var img = path ? gdi.Image(path) : null;
 
 ## Notes
 
-- **Emoji on Windows**: the default Windows emoji font shows flag emoji as two letters (e.g. "GR") instead of a flag. `%countryflag%` only renders real flags with a flag-capable font such as Twemoji Country Flags. For reliable results, use `%countryflag_path%` with PNG images.
+- **Emoji on Windows**: the default Windows emoji font shows flag emoji as two letters (e.g. "GR") instead of a flag. `%countryflag_emoji%` only renders real flags with a flag-capable font such as Twemoji Country Flags. For reliable results, use `%countryflag_path%` with PNG images.
 - **No `$function()` syntax**: foobar2000 does not let components register global title formatting functions, only fields. A call like `$flag(%x%)` is therefore not possible; set the source tags in preferences instead.
 - **Caching and restart**: changing source suffixes requires restarting foobar2000 so its title-formatting field list is updated. Flag image existence is checked again after about 30 seconds, so adding or deleting a flag image while foobar2000 is running is picked up within that time (or immediately if you change the flag folder setting).																																																																						  
 - **Thread safety**: fields are evaluated from multiple threads. The component reads its data once, lazily, and only reads configuration afterwards.
