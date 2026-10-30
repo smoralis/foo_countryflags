@@ -27,7 +27,8 @@
 // The script must not use the per-source %countryflag_*% fields (re-entrant calls are
 // ignored to prevent infinite recursion). %countryflag_lookup% is safe to use in scripts.
 //
-// Data file: countries.txt next to the DLL, lines of ISO2|ISO3|Name
+// Countries: a built-in ISO 3166-1 table. An optional countries.txt next to the DLL (lines of
+// ISO2|ISO3|Name) overrides entries with the same ISO2 and can add more.
 // Built in (no data-file entry needed): XE/EU = Europe, XW = Worldwide.
 //   XE is folded into EU; XW emits a globe emoji and looks for flags\xw.png.
 // Flag images: flags\gr.png, flags\us.png, ... next to the DLL (or custom folder).
@@ -64,7 +65,7 @@
 #pragma comment(lib, "UxTheme.lib")
 #pragma comment(lib, "Comctl32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.4",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.5",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
@@ -207,6 +208,263 @@ namespace {
         { "Europe", "", "EUR" },
     };
 
+    // Built-in ISO 3166-1 table (ISO2, ISO3, English name). An optional countries.txt next to the DLL
+    // (lines ISO2|ISO3|Name) overrides entries with the same ISO2 and can add more.
+    struct CountryRow { const char* a2; const char* a3; const char* name; };
+
+    const CountryRow kBuiltinCountries[] = {
+        { "AF", "AFG", "Afghanistan" },
+        { "AX", "ALA", "\xC3\x85land Islands" },
+        { "AL", "ALB", "Albania" },
+        { "DZ", "DZA", "Algeria" },
+        { "AS", "ASM", "American Samoa" },
+        { "AD", "AND", "Andorra" },
+        { "AO", "AGO", "Angola" },
+        { "AI", "AIA", "Anguilla" },
+        { "AQ", "ATA", "Antarctica" },
+        { "AG", "ATG", "Antigua and Barbuda" },
+        { "AR", "ARG", "Argentina" },
+        { "AM", "ARM", "Armenia" },
+        { "AW", "ABW", "Aruba" },
+        { "AU", "AUS", "Australia" },
+        { "AT", "AUT", "Austria" },
+        { "AZ", "AZE", "Azerbaijan" },
+        { "BS", "BHS", "Bahamas" },
+        { "BH", "BHR", "Bahrain" },
+        { "BD", "BGD", "Bangladesh" },
+        { "BB", "BRB", "Barbados" },
+        { "BY", "BLR", "Belarus" },
+        { "BE", "BEL", "Belgium" },
+        { "BZ", "BLZ", "Belize" },
+        { "BJ", "BEN", "Benin" },
+        { "BM", "BMU", "Bermuda" },
+        { "BT", "BTN", "Bhutan" },
+        { "BO", "BOL", "Bolivia" },
+        { "BQ", "BES", "Bonaire, Sint Eustatius and Saba" },
+        { "BA", "BIH", "Bosnia and Herzegovina" },
+        { "BW", "BWA", "Botswana" },
+        { "BV", "BVT", "Bouvet Island" },
+        { "BR", "BRA", "Brazil" },
+        { "IO", "IOT", "British Indian Ocean Territory" },
+        { "VG", "VGB", "British Virgin Islands" },
+        { "BN", "BRN", "Brunei" },
+        { "BG", "BGR", "Bulgaria" },
+        { "BF", "BFA", "Burkina Faso" },
+        { "BI", "BDI", "Burundi" },
+        { "CV", "CPV", "Cabo Verde" },
+        { "KH", "KHM", "Cambodia" },
+        { "CM", "CMR", "Cameroon" },
+        { "CA", "CAN", "Canada" },
+        { "KY", "CYM", "Cayman Islands" },
+        { "CF", "CAF", "Central African Republic" },
+        { "TD", "TCD", "Chad" },
+        { "CL", "CHL", "Chile" },
+        { "CN", "CHN", "China" },
+        { "CX", "CXR", "Christmas Island" },
+        { "CC", "CCK", "Cocos (Keeling) Islands" },
+        { "CO", "COL", "Colombia" },
+        { "KM", "COM", "Comoros" },
+        { "CG", "COG", "Congo" },
+        { "CD", "COD", "Democratic Republic of the Congo" },
+        { "CK", "COK", "Cook Islands" },
+        { "CR", "CRI", "Costa Rica" },
+        { "CI", "CIV", "C\xC3\xB4te d'Ivoire" },
+        { "HR", "HRV", "Croatia" },
+        { "CU", "CUB", "Cuba" },
+        { "CW", "CUW", "Cura\xC3\xA7" "ao" },
+        { "CY", "CYP", "Cyprus" },
+        { "CZ", "CZE", "Czechia" },
+        { "DK", "DNK", "Denmark" },
+        { "DJ", "DJI", "Djibouti" },
+        { "DM", "DMA", "Dominica" },
+        { "DO", "DOM", "Dominican Republic" },
+        { "EC", "ECU", "Ecuador" },
+        { "EG", "EGY", "Egypt" },
+        { "SV", "SLV", "El Salvador" },
+        { "GQ", "GNQ", "Equatorial Guinea" },
+        { "ER", "ERI", "Eritrea" },
+        { "EE", "EST", "Estonia" },
+        { "SZ", "SWZ", "Eswatini" },
+        { "ET", "ETH", "Ethiopia" },
+        { "FK", "FLK", "Falkland Islands" },
+        { "FO", "FRO", "Faroe Islands" },
+        { "FJ", "FJI", "Fiji" },
+        { "FI", "FIN", "Finland" },
+        { "FR", "FRA", "France" },
+        { "GF", "GUF", "French Guiana" },
+        { "PF", "PYF", "French Polynesia" },
+        { "TF", "ATF", "French Southern Territories" },
+        { "GA", "GAB", "Gabon" },
+        { "GM", "GMB", "Gambia" },
+        { "GE", "GEO", "Georgia" },
+        { "DE", "DEU", "Germany" },
+        { "GH", "GHA", "Ghana" },
+        { "GI", "GIB", "Gibraltar" },
+        { "GR", "GRC", "Greece" },
+        { "GL", "GRL", "Greenland" },
+        { "GD", "GRD", "Grenada" },
+        { "GP", "GLP", "Guadeloupe" },
+        { "GU", "GUM", "Guam" },
+        { "GT", "GTM", "Guatemala" },
+        { "GG", "GGY", "Guernsey" },
+        { "GN", "GIN", "Guinea" },
+        { "GW", "GNB", "Guinea-Bissau" },
+        { "GY", "GUY", "Guyana" },
+        { "HT", "HTI", "Haiti" },
+        { "HM", "HMD", "Heard Island and McDonald Islands" },
+        { "VA", "VAT", "Vatican City" },
+        { "HN", "HND", "Honduras" },
+        { "HK", "HKG", "Hong Kong" },
+        { "HU", "HUN", "Hungary" },
+        { "IS", "ISL", "Iceland" },
+        { "IN", "IND", "India" },
+        { "ID", "IDN", "Indonesia" },
+        { "IR", "IRN", "Iran" },
+        { "IQ", "IRQ", "Iraq" },
+        { "IE", "IRL", "Ireland" },
+        { "IM", "IMN", "Isle of Man" },
+        { "IL", "ISR", "Israel" },
+        { "IT", "ITA", "Italy" },
+        { "JM", "JAM", "Jamaica" },
+        { "JP", "JPN", "Japan" },
+        { "JE", "JEY", "Jersey" },
+        { "JO", "JOR", "Jordan" },
+        { "KZ", "KAZ", "Kazakhstan" },
+        { "KE", "KEN", "Kenya" },
+        { "KI", "KIR", "Kiribati" },
+        { "XK", "XKX", "Kosovo" },
+        { "KW", "KWT", "Kuwait" },
+        { "KG", "KGZ", "Kyrgyzstan" },
+        { "LA", "LAO", "Laos" },
+        { "LV", "LVA", "Latvia" },
+        { "LB", "LBN", "Lebanon" },
+        { "LS", "LSO", "Lesotho" },
+        { "LR", "LBR", "Liberia" },
+        { "LY", "LBY", "Libya" },
+        { "LI", "LIE", "Liechtenstein" },
+        { "LT", "LTU", "Lithuania" },
+        { "LU", "LUX", "Luxembourg" },
+        { "MO", "MAC", "Macao" },
+        { "MG", "MDG", "Madagascar" },
+        { "MW", "MWI", "Malawi" },
+        { "MY", "MYS", "Malaysia" },
+        { "MV", "MDV", "Maldives" },
+        { "ML", "MLI", "Mali" },
+        { "MT", "MLT", "Malta" },
+        { "MH", "MHL", "Marshall Islands" },
+        { "MQ", "MTQ", "Martinique" },
+        { "MR", "MRT", "Mauritania" },
+        { "MU", "MUS", "Mauritius" },
+        { "YT", "MYT", "Mayotte" },
+        { "MX", "MEX", "Mexico" },
+        { "FM", "FSM", "Micronesia" },
+        { "MD", "MDA", "Moldova" },
+        { "MC", "MCO", "Monaco" },
+        { "MN", "MNG", "Mongolia" },
+        { "ME", "MNE", "Montenegro" },
+        { "MS", "MSR", "Montserrat" },
+        { "MA", "MAR", "Morocco" },
+        { "MZ", "MOZ", "Mozambique" },
+        { "MM", "MMR", "Myanmar" },
+        { "NA", "NAM", "Namibia" },
+        { "NR", "NRU", "Nauru" },
+        { "NP", "NPL", "Nepal" },
+        { "NL", "NLD", "Netherlands" },
+        { "NC", "NCL", "New Caledonia" },
+        { "NZ", "NZL", "New Zealand" },
+        { "NI", "NIC", "Nicaragua" },
+        { "NE", "NER", "Niger" },
+        { "NG", "NGA", "Nigeria" },
+        { "NU", "NIU", "Niue" },
+        { "NF", "NFK", "Norfolk Island" },
+        { "KP", "PRK", "North Korea" },
+        { "MK", "MKD", "North Macedonia" },
+        { "MP", "MNP", "Northern Mariana Islands" },
+        { "NO", "NOR", "Norway" },
+        { "OM", "OMN", "Oman" },
+        { "PK", "PAK", "Pakistan" },
+        { "PW", "PLW", "Palau" },
+        { "PS", "PSE", "Palestine" },
+        { "PA", "PAN", "Panama" },
+        { "PG", "PNG", "Papua New Guinea" },
+        { "PY", "PRY", "Paraguay" },
+        { "PE", "PER", "Peru" },
+        { "PH", "PHL", "Philippines" },
+        { "PN", "PCN", "Pitcairn Islands" },
+        { "PL", "POL", "Poland" },
+        { "PT", "PRT", "Portugal" },
+        { "PR", "PRI", "Puerto Rico" },
+        { "QA", "QAT", "Qatar" },
+        { "RE", "REU", "R\xC3\xA9union" },
+        { "RO", "ROU", "Romania" },
+        { "RU", "RUS", "Russia" },
+        { "RW", "RWA", "Rwanda" },
+        { "BL", "BLM", "Saint Barth\xC3\xA9lemy" },
+        { "SH", "SHN", "Saint Helena, Ascension and Tristan da Cunha" },
+        { "KN", "KNA", "Saint Kitts and Nevis" },
+        { "LC", "LCA", "Saint Lucia" },
+        { "MF", "MAF", "Saint Martin" },
+        { "PM", "SPM", "Saint Pierre and Miquelon" },
+        { "VC", "VCT", "Saint Vincent and the Grenadines" },
+        { "WS", "WSM", "Samoa" },
+        { "SM", "SMR", "San Marino" },
+        { "ST", "STP", "Sao Tome and Principe" },
+        { "SA", "SAU", "Saudi Arabia" },
+        { "SN", "SEN", "Senegal" },
+        { "RS", "SRB", "Serbia" },
+        { "SC", "SYC", "Seychelles" },
+        { "SL", "SLE", "Sierra Leone" },
+        { "SG", "SGP", "Singapore" },
+        { "SX", "SXM", "Sint Maarten" },
+        { "SK", "SVK", "Slovakia" },
+        { "SI", "SVN", "Slovenia" },
+        { "SB", "SLB", "Solomon Islands" },
+        { "SO", "SOM", "Somalia" },
+        { "ZA", "ZAF", "South Africa" },
+        { "GS", "SGS", "South Georgia and the South Sandwich Islands" },
+        { "KR", "KOR", "South Korea" },
+        { "SS", "SSD", "South Sudan" },
+        { "ES", "ESP", "Spain" },
+        { "LK", "LKA", "Sri Lanka" },
+        { "SD", "SDN", "Sudan" },
+        { "SR", "SUR", "Suriname" },
+        { "SJ", "SJM", "Svalbard and Jan Mayen" },
+        { "SE", "SWE", "Sweden" },
+        { "CH", "CHE", "Switzerland" },
+        { "SY", "SYR", "Syria" },
+        { "TW", "TWN", "Taiwan" },
+        { "TJ", "TJK", "Tajikistan" },
+        { "TZ", "TZA", "Tanzania" },
+        { "TH", "THA", "Thailand" },
+        { "TL", "TLS", "Timor-Leste" },
+        { "TG", "TGO", "Togo" },
+        { "TK", "TKL", "Tokelau" },
+        { "TO", "TON", "Tonga" },
+        { "TT", "TTO", "Trinidad and Tobago" },
+        { "TN", "TUN", "Tunisia" },
+        { "TR", "TUR", "Turkey" },
+        { "TM", "TKM", "Turkmenistan" },
+        { "TC", "TCA", "Turks and Caicos Islands" },
+        { "TV", "TUV", "Tuvalu" },
+        { "UG", "UGA", "Uganda" },
+        { "UA", "UKR", "Ukraine" },
+        { "AE", "ARE", "United Arab Emirates" },
+        { "GB", "GBR", "United Kingdom" },
+        { "US", "USA", "United States" },
+        { "UM", "UMI", "United States Minor Outlying Islands" },
+        { "VI", "VIR", "US Virgin Islands" },
+        { "UY", "URY", "Uruguay" },
+        { "UZ", "UZB", "Uzbekistan" },
+        { "VU", "VUT", "Vanuatu" },
+        { "VE", "VEN", "Venezuela" },
+        { "VN", "VNM", "Vietnam" },
+        { "WF", "WLF", "Wallis and Futuna" },
+        { "EH", "ESH", "Western Sahara" },
+        { "YE", "YEM", "Yemen" },
+        { "ZM", "ZMB", "Zambia" },
+        { "ZW", "ZWE", "Zimbabwe" },
+    };
+
     struct Db {
         std::unordered_map<std::string, std::string> a2name;
         std::unordered_map<std::string, std::string> a3to2;
@@ -219,6 +477,17 @@ namespace {
         static Db d;
         static std::once_flag once;
         std::call_once(once, [] {
+            // Adds or replaces one country. Names and ISO3 codes of a replaced entry stay accepted as
+            // aliases, so an override file can rename a country without breaking old values.
+            auto put = [&](const std::string& a2, const std::string& a3, const std::string& nm) {
+                d.a2name[a2] = nm;
+                d.a3to2[a3] = a2;
+                d.a2to3[a2] = a3;
+                d.name2to2[lower(nm)] = a2;
+                };
+            for (const CountryRow& r : kBuiltinCountries) put(r.a2, r.a3, r.name);
+
+            // Optional override / extension file next to the DLL.
             std::ifstream f(componentDir() / "countries.txt");
             std::string line;
             while (std::getline(f, line)) {
@@ -227,13 +496,11 @@ namespace {
                 auto p1 = line.find('|');
                 auto p2 = p1 == std::string::npos ? p1 : line.find('|', p1 + 1);
                 if (p2 == std::string::npos) continue;
-                std::string a2 = upper(line.substr(0, p1));
-                std::string a3 = upper(line.substr(p1 + 1, p2 - p1 - 1));
-                std::string nm = line.substr(p2 + 1);
-                d.a2name[a2] = nm;
-                d.a3to2[a3] = a2;
-                d.a2to3[a2] = a3;
-                d.name2to2[lower(nm)] = a2;
+                const std::string a2 = upper(line.substr(0, p1));
+                const std::string a3 = upper(line.substr(p1 + 1, p2 - p1 - 1));
+                const std::string nm = line.substr(p2 + 1);
+                if (a2.empty() || a3.empty() || nm.empty()) continue;
+                put(a2, a3, nm);
             }
             auto addBuiltin = [&](const char* a2, const char* a3, const char* nm) {
                 if (d.a2name.count(a2)) return;
@@ -923,6 +1190,27 @@ namespace {
         return result;
     }
 
+    // Scripts may be written over several lines: whole-line // comments are dropped, leading and
+    // trailing whitespace of every line is removed and the lines are joined into the one-liner
+    // that is compiled.
+    std::string flattenScript(const std::string& text) {
+        std::string out;
+        size_t pos = 0;
+        while (pos <= text.size()) {
+            size_t end = text.find('\n', pos);
+            if (end == std::string::npos) end = text.size();
+            std::string line = text.substr(pos, end - pos);
+            while (!line.empty() && (line.back() == '\r' || line.back() == ' ' || line.back() == '\t')) line.pop_back();
+            size_t first = 0;
+            while (first < line.size() && (line[first] == ' ' || line[first] == '\t')) ++first;
+            line.erase(0, first);
+            if (!line.empty() && line.compare(0, 2, "//") != 0) out += line;
+            if (end == text.size()) break;
+            pos = end + 1;
+        }
+        return out;
+    }
+
     struct ScriptCache {
         std::mutex m;
         std::string raw;
@@ -948,25 +1236,33 @@ namespace {
 
     titleformat_object::ptr compiledScript(size_t slot) {
         const char* src = sourceConfig(slot)->get();
-        if (src == nullptr) src = "";
+        const std::string flat = flattenScript(src ? src : "");
 
         ScriptCache& c = sourceScriptCache(slot);
         std::lock_guard<std::mutex> lock(c.m);
-        if (!c.init || c.raw != src) {
+        if (!c.init || c.raw != flat) {
             titleformat_object::ptr obj;
-            titleformat_compiler::get()->compile_safe(obj, src);
+            titleformat_compiler::get()->compile_safe(obj, flat.c_str());
             c.obj = obj;
-            c.raw = src;
+            c.raw = flat;
             c.init = true;
         }
         return c.obj;
     }
 
+    // What one source produced for one track: the resolved countries plus the raw script results
+    // (published as the _argument / _fallbackargument fields for debugging).
+    struct SourceResult {
+        std::vector<std::string> countries;
+        std::string argument;           // raw (trimmed) result of the source script
+        std::string fallbackArgument;   // raw result of the fallback script; empty when it did not run
+    };
+
     struct CountryCacheEntry {
         metadb_info_container::ptr info;
         unsigned generation = 0;
         std::chrono::steady_clock::time_point stored;
-        std::vector<std::string> countries;
+        SourceResult result;
     };
 
     struct CountryCache {
@@ -1002,8 +1298,7 @@ namespace {
     };
     initquit_factory_t<quit_cleanup> g_quit_cleanup;
 
-    std::string evalScript(metadb_handle* h, size_t slot) {
-        titleformat_object::ptr script = compiledScript(slot);
+    std::string evalCompiled(metadb_handle* h, const titleformat_object::ptr& script) {
         if (script.is_empty()) return {};
         pfc::string8 result;
         MetaList overlay;
@@ -1017,12 +1312,16 @@ namespace {
         return trim(result.c_str());
     }
 
+    std::string evalScript(metadb_handle* h, size_t slot) {
+        return evalCompiled(h, compiledScript(slot));
+    }
+
     std::vector<std::string> parseCountryList(const std::string& whole) {
         std::vector<std::string> countries;
         if (whole.empty()) return countries;
         size_t pos = 0;
         while (pos <= whole.size()) {
-            size_t end = whole.find_first_of(",;/", pos);
+            size_t end = whole.find_first_of(",;/+", pos);
             if (end == std::string::npos) end = whole.size();
             const std::string piece = trim(whole.substr(pos, end - pos).c_str());
             const std::string iso = normalize(piece.c_str());
@@ -1034,7 +1333,7 @@ namespace {
         return countries;
     }
 
-    std::vector<std::string> countriesOf(metadb_handle* h, size_t sourceIndex) {
+    SourceResult resolveSource(metadb_handle* h, size_t sourceIndex) {
         thread_local bool inside = false;
         if (inside) return {};
         struct Guard {
@@ -1056,13 +1355,15 @@ namespace {
             if (it != cc.map.end() && it->second.generation == generation &&
                 it->second.info.get_ptr() == info.get_ptr() &&
                 clock::now() - it->second.stored < std::chrono::seconds(10))
-                return it->second.countries;
+                return it->second.result;
         }
 
-        std::vector<std::string> countries = parseCountryList(evalScript(h, sourceIndex));
-        if (countries.empty()) {
-            const std::string artist = evalScript(h, 5 + sourceIndex);
-            if (!artist.empty()) countries = lookupArtistName(artist);
+        SourceResult result;
+        result.argument = evalScript(h, sourceIndex);
+        result.countries = parseCountryList(result.argument);
+        if (result.countries.empty()) {
+            result.fallbackArgument = evalScript(h, 5 + sourceIndex);
+            if (!result.fallbackArgument.empty()) result.countries = lookupArtistName(result.fallbackArgument);
         }
 
         if (info.is_valid()) {
@@ -1073,9 +1374,13 @@ namespace {
             e.info = info;
             e.generation = generation;
             e.stored = clock::now();
-            e.countries = countries;
+            e.result = result;
         }
-        return countries;
+        return result;
+    }
+
+    std::vector<std::string> countriesOf(metadb_handle* h, size_t sourceIndex) {
+        return resolveSource(h, sourceIndex).countries;
     }
 
     const GUID guid_country_flags_preferences = {
@@ -1109,6 +1414,7 @@ namespace {
     constexpr int ID_ORDER_WORLD = 1041;
     constexpr int ID_ORDER_FLAT = 1042;
     constexpr int ID_TAB = 1050;
+    constexpr int ID_EDITSCRIPT_BASE = 1060;   // 1060..1069: the "..." buttons (slot 0-4 sources, 5-9 fallbacks)
     constexpr const char* kFixedText = "(fixed - no suffix)";
 
     const int kEditIds[] = {
@@ -1122,12 +1428,234 @@ namespace {
         return DefWindowProcW(wnd, msg, wp, lp);
     }
 
+
+    // ---- Large script editor (modal, resizable) ----
+    constexpr int ID_SE_EDIT = 3001;
+    constexpr int ID_SE_HINT = 3002;
+    constexpr int ID_SE_TEST = 3003;
+    constexpr int ID_SE_RESULT = 3004;
+
+    struct ScriptEditorState {
+        std::string text;
+        bool accepted = false;
+        int kind = 0;               // 0 = titleformat script (country), 1 = fallback script (artist name)
+        HFONT font = nullptr;
+        fb2k::CCoreDarkModeHooks dark;
+    };
+
+    // Evaluates the script text from the editor (saved or not) on the selected playlist item, or the
+    // playing track, and describes what the component would make of it.
+    std::string scriptTestReport(const std::string& text, int kind) {
+        metadb_handle_ptr track;
+        metadb_handle_list sel;
+        playlist_manager::get()->activeplaylist_get_selected_items(sel);
+        if (sel.get_count() > 0) track = sel[0];
+        else playback_control::get()->get_now_playing(track);
+        if (track.is_empty()) return "Select a track in the playlist (or start playback), then press Test.";
+
+        const std::string flat = flattenScript(text);
+        if (flat.empty()) return "(empty script)";
+        titleformat_object::ptr obj;
+        if (!titleformat_compiler::get()->compile(obj, flat.c_str())) return "The script does not compile.";
+
+        titleformat_object::ptr nameScript;
+        titleformat_compiler::get()->compile_safe(nameScript, "%artist% - %title%");
+        std::string report = "Track: " + evalCompiled(track.get_ptr(), nameScript);
+
+        const std::string value = evalCompiled(track.get_ptr(), obj);
+        report += "\r\nResult: " + (value.empty() ? std::string("(empty)") : value);
+
+        auto describe = [](const std::vector<std::string>& isos) {
+            std::string out;
+            for (const auto& iso : isos) {
+                if (!out.empty()) out += ", ";
+                out += iso;
+                const auto it = db().a2name.find(iso);
+                if (it != db().a2name.end()) out += " (" + it->second + ")";
+            }
+            return out;
+            };
+        if (kind == 0) {
+            const std::string countries = describe(parseCountryList(value));
+            report += "\r\nCountries: " + (countries.empty() ? std::string("(none recognised - the fallback script would run)") : countries);
+        }
+        else {
+            const std::string countries = value.empty() ? std::string() : describe(lookupArtistName(value));
+            report += "\r\nArtist tables: " + (countries.empty() ? std::string("(artist not found)") : countries);
+        }
+        return report;
+    }
+
+    LRESULT CALLBACK scriptEditSubclass(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR) {
+        // Ctrl+A selects everything (multi-line EDIT controls do not do this themselves)
+        if (msg == WM_KEYDOWN && wp == 'A' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            SendMessageW(wnd, EM_SETSEL, 0, -1);
+            return 0;
+        }
+        if (msg == WM_CHAR && wp == 1) return 0;
+        if (msg == WM_NCDESTROY) RemoveWindowSubclass(wnd, scriptEditSubclass, id);
+        return DefSubclassProc(wnd, msg, wp, lp);
+    }
+
+    int editorDpi(HWND wnd) {
+        HDC dc = GetDC(wnd);
+        const int dpi = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+        if (dc) ReleaseDC(wnd, dc);
+        return dpi > 0 ? dpi : 96;
+    }
+
+    void scriptEditorLayout(HWND dlg) {
+        RECT rc{};
+        GetClientRect(dlg, &rc);
+        const int dpi = editorDpi(dlg);
+        auto S = [&](int v) { return MulDiv(v, dpi, 96); };
+        const int margin = S(10), btnW = S(80), btnH = S(26), hintH = S(34), resultH = S(84), testW = S(130);
+        const int w = rc.right, h = rc.bottom;
+        const int buttonsY = h - margin - btnH;
+        const int resultY = buttonsY - margin - resultH;
+        const int hintY = resultY - S(6) - hintH;
+        SetWindowPos(GetDlgItem(dlg, ID_SE_EDIT), nullptr, margin, margin, w - 2 * margin,
+            (std::max)(S(40), hintY - S(6) - margin), SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(dlg, ID_SE_HINT), nullptr, margin, hintY, w - 2 * margin, hintH, SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(dlg, ID_SE_RESULT), nullptr, margin, resultY, w - 2 * margin, resultH, SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(dlg, ID_SE_TEST), nullptr, margin, buttonsY, testW, btnH, SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(dlg, IDOK), nullptr, w - 2 * margin - 2 * btnW, buttonsY, btnW, btnH, SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(dlg, IDCANCEL), nullptr, w - margin - btnW, buttonsY, btnW, btnH, SWP_NOZORDER);
+    }
+
+    INT_PTR CALLBACK scriptEditorProc(HWND dlg, UINT msg, WPARAM wp, LPARAM lp) {
+        ScriptEditorState* st = reinterpret_cast<ScriptEditorState*>(GetWindowLongPtrW(dlg, DWLP_USER));
+        switch (msg) {
+        case WM_INITDIALOG: {
+            st = reinterpret_cast<ScriptEditorState*>(lp);
+            SetWindowLongPtrW(dlg, DWLP_USER, reinterpret_cast<LONG_PTR>(st));
+            HINSTANCE inst = core_api::get_my_instance();
+            HGDIOBJ gui = GetStockObject(DEFAULT_GUI_FONT);
+
+            const int dpi = editorDpi(dlg);
+            st->font = CreateFontW(-MulDiv(10, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
+
+            HWND edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_WANTRETURN | ES_NOHIDESEL,
+                0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_EDIT)), inst, nullptr);
+            SendMessageW(edit, WM_SETFONT, reinterpret_cast<WPARAM>(st->font ? static_cast<HGDIOBJ>(st->font) : gui), TRUE);
+            SetWindowSubclass(edit, scriptEditSubclass, 1, 0);
+
+            std::string crlf;
+            for (char c : st->text) {
+                if (c == '\r') continue;
+                if (c == '\n') crlf += "\r\n"; else crlf += c;
+            }
+            pfc::stringcvt::string_wide_from_utf8 wide(crlf.c_str());
+            SetWindowTextW(edit, wide.get_ptr());
+
+            HWND hint = CreateWindowExW(0, L"STATIC",
+                L"Line breaks and indentation are removed, and lines that start with // are ignored, when the script is compiled. "
+                L"Do not rely on line breaks inside quoted text.",
+                WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0, 10, 10, dlg,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_HINT)), inst, nullptr);
+            SendMessageW(hint, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+            HWND test = CreateWindowExW(0, L"BUTTON", L"Test on selected track", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_TEST)), inst, nullptr);
+            SendMessageW(test, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+            HWND result = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+                0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_RESULT)), inst, nullptr);
+            SendMessageW(result, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+            HWND ok = CreateWindowExW(0, L"BUTTON", L"OK", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+                0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDOK)), inst, nullptr);
+            SendMessageW(ok, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+            HWND cancel = CreateWindowExW(0, L"BUTTON", L"Cancel", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDCANCEL)), inst, nullptr);
+            SendMessageW(cancel, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+
+            scriptEditorLayout(dlg);
+            st->dark.AddDialogWithControls(dlg);
+            SetFocus(edit);
+            SendMessageW(edit, EM_SETSEL, 0, 0);
+            return FALSE;   // focus was set explicitly
+        }
+        case WM_SIZE:
+            scriptEditorLayout(dlg);
+            return TRUE;
+        case WM_GETMINMAXINFO: {
+            const int dpi = editorDpi(dlg);
+            auto* mm = reinterpret_cast<MINMAXINFO*>(lp);
+            mm->ptMinTrackSize.x = MulDiv(360, dpi, 96);
+            mm->ptMinTrackSize.y = MulDiv(300, dpi, 96);
+            return TRUE;
+        }
+        case WM_COMMAND:
+            if (LOWORD(wp) == IDOK && st) {
+                HWND edit = GetDlgItem(dlg, ID_SE_EDIT);
+                const int len = GetWindowTextLengthW(edit);
+                std::wstring wide(static_cast<size_t>(len) + 1, L'\0');
+                GetWindowTextW(edit, wide.data(), len + 1);
+                wide.resize(len);
+                pfc::stringcvt::string_utf8_from_wide utf8(wide.c_str());
+                std::string text;
+                for (const char* c = utf8.get_ptr(); *c; ++c) if (*c != '\r') text += *c;
+                st->text = text;
+                st->accepted = true;
+                EndDialog(dlg, IDOK);
+                return TRUE;
+            }
+            if (LOWORD(wp) == ID_SE_TEST && HIWORD(wp) == BN_CLICKED && st) {
+                HWND edit = GetDlgItem(dlg, ID_SE_EDIT);
+                const int len = GetWindowTextLengthW(edit);
+                std::wstring wide(static_cast<size_t>(len) + 1, L'\0');
+                GetWindowTextW(edit, wide.data(), len + 1);
+                wide.resize(len);
+                pfc::stringcvt::string_utf8_from_wide utf8(wide.c_str());
+                std::string text;
+                for (const char* c = utf8.get_ptr(); *c; ++c) if (*c != '\r') text += *c;
+                const std::string report = scriptTestReport(text, st->kind);
+                pfc::stringcvt::string_wide_from_utf8 out(report.c_str());
+                SetWindowTextW(GetDlgItem(dlg, ID_SE_RESULT), out.get_ptr());
+                return TRUE;
+            }
+            if (LOWORD(wp) == IDCANCEL) { EndDialog(dlg, IDCANCEL); return TRUE; }
+            break;
+        case WM_DESTROY:
+            if (st && st->font) { DeleteObject(st->font); st->font = nullptr; }
+            break;
+        }
+        return FALSE;
+    }
+
+    // Shows the editor; returns true (and updates text) when the user pressed OK.
+    bool editScriptDialog(HWND owner, const wchar_t* title, std::string& text, int kind) {
+        std::vector<WORD> tpl;
+        auto push32 = [&](DWORD v) { tpl.push_back(LOWORD(v)); tpl.push_back(HIWORD(v)); };
+        push32(DS_MODALFRAME | DS_CENTER | DS_SETFONT | WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_THICKFRAME | WS_MAXIMIZEBOX);
+        push32(0);
+        tpl.push_back(0);                                   // no template items
+        tpl.push_back(0); tpl.push_back(0);                 // x, y
+        tpl.push_back(293); tpl.push_back(227);             // cx, cy in dialog units
+        tpl.push_back(0); tpl.push_back(0);                 // no menu, default class
+        for (const wchar_t* c = title; *c; ++c) tpl.push_back(static_cast<WORD>(*c));
+        tpl.push_back(0);
+        tpl.push_back(9);                                   // font size
+        for (const wchar_t* c = L"Segoe UI"; *c; ++c) tpl.push_back(static_cast<WORD>(*c));
+        tpl.push_back(0);
+
+        ScriptEditorState state;
+        state.text = text;
+        state.kind = kind;
+        DialogBoxIndirectParamW(core_api::get_my_instance(), reinterpret_cast<LPCDLGTEMPLATEW>(tpl.data()),
+            owner, scriptEditorProc, reinterpret_cast<LPARAM>(&state));
+        if (!state.accepted) return false;
+        text = state.text;
+        return true;
+    }
+
     class country_flags_preferences_instance : public preferences_page_instance {
     public:
         country_flags_preferences_instance(HWND parent, preferences_page_callback::ptr callback)
             : m_callback(callback), m_wnd(nullptr), m_tabWnd(nullptr), m_tab1Wnd(nullptr), m_tab2Wnd(nullptr),
             m_ready(false), m_originalOrder(0),
-            m_note(nullptr), m_boldFont(nullptr),
+            m_note(nullptr), m_boldFont(nullptr), m_settingScript(false),
             m_flagLabel(nullptr), m_artistLabel(nullptr), m_artist2Label(nullptr),
             m_orderLabel(nullptr), m_orderWorld(nullptr), m_orderFlat(nullptr),
             m_statusFlag(nullptr), m_statusArtist(nullptr), m_statusArtist2(nullptr),
@@ -1138,6 +1666,7 @@ namespace {
 
             std::memset(m_rowLabel, 0, sizeof(m_rowLabel));
             std::memset(m_caption, 0, sizeof(m_caption));
+            std::memset(m_editBtn, 0, sizeof(m_editBtn));
             std::memset(m_statusColor, 0, sizeof(m_statusColor));
 
             HINSTANCE hInstance = core_api::get_my_instance();
@@ -1399,10 +1928,20 @@ namespace {
                 case ID_ORDER_FLAT:
                     if (m_ready && m_callback.is_valid()) m_callback->on_state_changed();
                     return 0;
-                default: break;
+                default:
+                    if (LOWORD(wp) >= ID_EDITSCRIPT_BASE && LOWORD(wp) < ID_EDITSCRIPT_BASE + 10) {
+                        openScriptEditor(LOWORD(wp) - ID_EDITSCRIPT_BASE);
+                        return 0;
+                    }
+                    break;
                 }
             }
             if (msg == WM_COMMAND && HIWORD(wp) == EN_CHANGE) {
+                const int scriptIdx = scriptIndex(LOWORD(wp));
+                if (scriptIdx >= 0) {
+                    if (m_settingScript) return 0;                // programmatic update of the displayed text
+                    m_full[scriptIdx] = rawEditText(LOWORD(wp));  // user typed in the box: it replaces the stored text
+                }
                 if (m_ready) {
                     const int id = LOWORD(wp);
                     if (id == ID_FLAG_DIR || id == ID_ARTIST_FILE || id == ID_ARTIST2_FILE) updateStatus();
@@ -1481,6 +2020,14 @@ namespace {
             return c;
         }
 
+        HWND addEditorButton(int id) const {
+            HWND b = CreateWindowExW(0, L"BUTTON", L"...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, m_tab1Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                core_api::get_my_instance(), nullptr);
+            SendMessageW(b, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            return b;
+        }
+
         void createTab1Controls() {
             {
                 LOGFONTW lf{};
@@ -1501,7 +2048,9 @@ namespace {
                 // created in visual order so Tab moves suffix -> titleformat -> fallback
                 addEdit(m_tab1Wnd, prefixIDs[i]);
                 addEdit(m_tab1Wnd, scriptIDs[i]);
+                m_editBtn[i] = addEditorButton(ID_EDITSCRIPT_BASE + i);
                 addEdit(m_tab1Wnd, fallbackIDs[i]);
+                m_editBtn[5 + i] = addEditorButton(ID_EDITSCRIPT_BASE + 5 + i);
             }
             setEdit(ID_PREFIX1, kFixedText);
             EnableWindow(control(ID_PREFIX1), FALSE);
@@ -1509,7 +2058,7 @@ namespace {
             m_note = addLabel(m_tab1Wnd,
                 L"Source 1 uses the fixed fields %countryflag_emoji%, %countryflag_path%, ...\n"
                 L"Sources 2-5 use %countryflag_<suffix>_emoji% etc.: enter only the suffix, not \"countryflag_\".\n"
-                L"Restart foobar2000 after changing a suffix.\n"
+                L"Restart foobar2000 after changing a suffix. Use the ... buttons to edit long scripts on several lines.\n"
                 L"The fallback script runs only when the script returns no country; its result (an artist name)\n"
                 L"is looked up in the artist tables on the Folders tab.");
         }
@@ -1577,6 +2126,8 @@ namespace {
             const int captionW = S(84);
             const int xEdit = margin + captionW;
             const int editW = (std::max)(S(60), fullW1 - captionW);
+            const int editBtnW = S(30);
+            const int scriptEditW = (std::max)(S(40), editW - editBtnW - gap / 2);
             const int suffixCapW = S(46), suffixEditW = (std::min)(S(200), (std::max)(S(60), editW - suffixCapW - gap));
 
             auto place = [&](HWND h, int x, int y, int w, int hgt) {
@@ -1595,13 +2146,15 @@ namespace {
                 place(m_caption[i][0], xEdit, y1 + capDy, suffixCapW, capH);
                 place(GetDlgItem(m_tab1Wnd, prefixIDs[i]), xEdit + suffixCapW + gap, y1, suffixEditW, rowH1);
                 y1 += rowH1 + rowGap;
-                // Row 2: titleformat
+                // Row 2: titleformat (+ "..." editor button)
                 place(m_caption[i][1], margin, y1 + capDy, captionW - gap, capH);
-                place(GetDlgItem(m_tab1Wnd, scriptIDs[i]), xEdit, y1, editW, rowH1);
+                place(GetDlgItem(m_tab1Wnd, scriptIDs[i]), xEdit, y1, scriptEditW, rowH1);
+                place(m_editBtn[i], xEdit + scriptEditW + gap / 2, y1, editBtnW, rowH1);
                 y1 += rowH1 + rowGap;
-                // Row 3: fallback
+                // Row 3: fallback (+ "..." editor button)
                 place(m_caption[i][2], margin, y1 + capDy, captionW - gap, capH);
-                place(GetDlgItem(m_tab1Wnd, fallbackIDs[i]), xEdit, y1, editW, rowH1);
+                place(GetDlgItem(m_tab1Wnd, fallbackIDs[i]), xEdit, y1, scriptEditW, rowH1);
+                place(m_editBtn[5 + i], xEdit + scriptEditW + gap / 2, y1, editBtnW, rowH1);
                 y1 += rowH1 + groupGap;
             }
             place(m_note, margin, y1, fullW1, noteH);
@@ -1741,7 +2294,18 @@ namespace {
                 SendMessageW(control(ID_ORDER_FLAT), BM_GETCHECK, 0, 0) == BST_CHECKED ? 1 : 0;
         }
 
+        static int scriptIndex(int id) {
+            if (id >= ID_SOURCE1 && id <= ID_SOURCE5) return id - ID_SOURCE1;
+            if (id >= ID_FALLBACK1 && id <= ID_FALLBACK5) return 5 + (id - ID_FALLBACK1);
+            return -1;
+        }
+        // Script boxes show the compiled (flattened) form; the real, possibly multi-line text is kept in m_full.
         std::string readEdit(int id) const {
+            const int idx = scriptIndex(id);
+            if (idx >= 0) return m_full[idx];
+            return rawEditText(id);
+        }
+        std::string rawEditText(int id) const {
             HWND edit = control(id);
             if (!edit) return {};
             const int len = GetWindowTextLengthW(edit);
@@ -1753,9 +2317,32 @@ namespace {
         }
 
         void setEdit(int id, const char* value) const {
+            const int idx = scriptIndex(id);
+            if (idx >= 0) {
+                m_full[idx] = value ? value : "";
+                const std::string shown = flattenScript(m_full[idx]);
+                pfc::stringcvt::string_wide_from_utf8 wide(shown.c_str());
+                HWND e = control(id);
+                m_settingScript = true;
+                if (e) SetWindowTextW(e, wide.get_ptr());
+                m_settingScript = false;
+                return;
+            }
             pfc::stringcvt::string_wide_from_utf8 wide(value);
             HWND edit = control(id);
             if (edit) SetWindowTextW(edit, wide.get_ptr());
+        }
+
+        void openScriptEditor(int slot) {
+            static const int ids[10] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5,
+                ID_FALLBACK1, ID_FALLBACK2, ID_FALLBACK3, ID_FALLBACK4, ID_FALLBACK5 };
+            if (slot < 0 || slot > 9) return;
+            const std::wstring title = (slot < 5 ? L"Source " + std::to_wstring(slot + 1) + L" - Titleformat string"
+                : L"Source " + std::to_wstring(slot - 4) + L" - Fallback string");
+            std::string text = readEdit(ids[slot]);
+            if (!editScriptDialog(m_wnd, title.c_str(), text, slot < 5 ? 0 : 1)) return;
+            setEdit(ids[slot], text.c_str());
+            if (m_ready && m_callback.is_valid()) m_callback->on_state_changed();
         }
 
         void saveEdit(int id, cfg_string& cfg) const {
@@ -1810,6 +2397,9 @@ namespace {
         HWND m_note;
         HWND m_caption[5][3];   // per source: suffix / titleformat / fallback captions
         HFONT m_boldFont;
+        HWND m_editBtn[10];                 // "..." buttons: slot 0-4 titleformat, 5-9 fallback
+        mutable std::string m_full[10];     // full (multi-line) text of the ten scripts
+        mutable bool m_settingScript;
         HWND m_flagLabel, m_artistLabel, m_artist2Label;
         HWND m_orderLabel, m_orderWorld, m_orderFlat;
         HWND m_statusFlag, m_statusArtist, m_statusArtist2;
@@ -1837,7 +2427,7 @@ namespace {
 
     class flag_fields : public metadb_display_field_provider {
     public:
-        static constexpr t_uint32 kKinds = 7;
+        static constexpr t_uint32 kKinds = 9;
         static constexpr t_uint32 kLookupIndex = 5 * kKinds;
 
         t_uint32 get_field_count() override { return kLookupIndex + 1; }
@@ -1845,7 +2435,7 @@ namespace {
         void get_field_name(t_uint32 index, pfc::string_base& out) override {
             if (index == kLookupIndex) { out.set_string("countryflag_lookup"); return; }
             if (index > kLookupIndex) { out.reset(); return; }
-            static const char* suffixes[kKinds] = { "emoji", "path", "name", "iso2", "iso3", "region", "subregion" };
+            static const char* suffixes[kKinds] = { "emoji", "path", "name", "iso2", "iso3", "region", "subregion", "argument", "fallbackargument" };
             const std::string prefix = fieldPrefix(index / kKinds);
             if (prefix.empty()) { out.set_string(""); return; }
             const std::string name = prefix + suffixes[index % kKinds];
@@ -1865,7 +2455,15 @@ namespace {
             }
             const size_t sourceIndex = index / kKinds;
             const t_uint32 kind = index % kKinds;
-            const std::vector<std::string> countries = countriesOf(handle, sourceIndex);
+            const SourceResult resolved = resolveSource(handle, sourceIndex);
+            if (kind == 7 || kind == 8) {
+                // Debug fields: the raw script results, published even when no country was found.
+                const std::string& raw = kind == 7 ? resolved.argument : resolved.fallbackArgument;
+                if (raw.empty()) return false;
+                out->write(titleformat_inputtypes::meta, raw.c_str(), raw.length());
+                return true;
+            }
+            const std::vector<std::string>& countries = resolved.countries;
             if (countries.empty()) return false;
 
             std::string value;
