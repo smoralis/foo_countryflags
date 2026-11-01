@@ -17,9 +17,12 @@
 // Fields per source: emoji, path, name, iso2, iso3, region, subregion (cultural regions, e.g.
 // SLE -> Africa / West Africa; built-in table, extendable with regions.txt).
 // Extra field: %countryflag_lookup% = ISO2 code(s) of the track's artist(s) found in the artist tables
-//   (next to the DLL; flat JSON {"artist name": "CC"}, case-insensitive, reloaded when changed).
+//   (country_codes.json: flat JSON {"artist name": "CC"}, case-insensitive, reloaded when changed).
 //   For the playing stream, the dynamic (ICY) artist is searched first.
-//   The file location can be set in preferences (empty = next to the DLL).
+//   The file locations can be set in preferences. Empty box = default: country_codes.json is
+//   profile\foo_uie_jsplitter\package_data\{BA9557CE-7B4B-4E0E-9373-99F511E81252}\country_codes.json
+//   if that file exists, else next to the DLL; worldMap.json is profile\js_data\worldMap.json,
+//   else next to the DLL.
 //   worldMap.json ([{"artist": "...", "val": [..., "Country"]}]; the last item of val is the
 //   country) and country_codes.json are both searched; which one takes precedence when an
 //   artist is in both is a setting (default: worldMap.json first).
@@ -42,6 +45,7 @@
 #include <foobar2000/SDK/coreDarkMode.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <atomic>
 #include <cstdint>
 #include <filesystem>
@@ -57,6 +61,7 @@
 #include <unordered_set>
 #include <windows.h>
 #include <commctrl.h>
+#include <commdlg.h>
 #include <uxtheme.h>
 #include <shobjidl.h>
 #pragma comment(lib, "Gdi32.lib")
@@ -64,8 +69,9 @@
 #pragma comment(lib, "Ole32.lib")
 #pragma comment(lib, "UxTheme.lib")
 #pragma comment(lib, "Comctl32.lib")
+#pragma comment(lib, "Comdlg32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.5",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.6",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
@@ -727,13 +733,26 @@ namespace {
         return p;
     }
 
-    fs::path defaultTablePath(const char* fileName, bool profileJsData) {
+    // Where an artist table is looked for when its path box is empty.
+    enum DefaultLocation {
+        kLocComponent = 0,          // next to the DLL only
+        kLocJsData = 1,             // profile\js_data\<file>, else next to the DLL
+        kLocJSplitterPackage = 2    // profile\foo_uie_jsplitter\package_data\{GUID}\<file> if it exists, else next to the DLL
+    };
+
+    fs::path defaultTablePath(const char* fileName, int location) {
         const fs::path inComponent = componentDir() / fileName;
-        if (!profileJsData) return inComponent;
+        if (location == kLocComponent) return inComponent;
         const std::wstring& prof = profileDirWide();
         if (prof.empty()) return inComponent;
-        const fs::path inProfile = fs::path(prof) / L"js_data" / fileName;
         std::error_code ec;
+        if (location == kLocJSplitterPackage) {
+            const fs::path inPackage = fs::path(prof) / L"foo_uie_jsplitter" / L"package_data" /
+                L"{BA9557CE-7B4B-4E0E-9373-99F511E81252}" / fileName;
+            if (fs::exists(inPackage, ec)) return inPackage;
+            return inComponent;
+        }
+        const fs::path inProfile = fs::path(prof) / L"js_data" / fileName;
         if (fs::exists(inProfile, ec)) return inProfile;
         if (fs::exists(inComponent, ec)) return inComponent;
         return inProfile;
@@ -918,7 +937,7 @@ namespace {
     };
 
     std::shared_ptr<const ArtistMap> loadArtistTable(ArtistTable& t, const std::string& custom,
-        const char* defaultFile, bool profileJsData, bool arrayFormat) {
+        const char* defaultFile, int location, bool arrayFormat) {
         using clock = std::chrono::steady_clock;
         std::lock_guard<std::mutex> lock(t.m);
         if (t.path != custom) {
@@ -932,7 +951,7 @@ namespace {
         t.checked = now;
 
         std::error_code ec;
-        const fs::path p = custom.empty() ? defaultTablePath(defaultFile, profileJsData) : expandPath(custom);
+        const fs::path p = custom.empty() ? defaultTablePath(defaultFile, location) : expandPath(custom);
         const auto stamp = fs::last_write_time(p, ec);
         if (ec) {
             if (!t.map || !t.map->empty()) ++g_generation;
@@ -969,12 +988,12 @@ namespace {
 
     std::shared_ptr<const ArtistMap> artistMap() {
         static ArtistTable t;
-        return loadArtistTable(t, trim(g_cfgArtistFile.get()), "country_codes.json", false, false);
+        return loadArtistTable(t, trim(g_cfgArtistFile.get()), "country_codes.json", kLocJSplitterPackage, false);
     }
 
     std::shared_ptr<const ArtistMap> artistMap2() {
         static ArtistTable t;
-        return loadArtistTable(t, trim(g_cfgArtistFile2.get()), "worldMap.json", true, true);
+        return loadArtistTable(t, trim(g_cfgArtistFile2.get()), "worldMap.json", kLocJsData, true);
     }
 
     const std::string* findArtist(const ArtistMap& m, const std::string& name) {
@@ -1004,13 +1023,10 @@ namespace {
         return iso;
     }
 
-    using MetaList = std::vector<std::pair<std::string, std::string>>;
-
     struct DynamicArtists {
         std::mutex m;
         metadb_handle_ptr track;
         std::vector<std::string> artists;
-        MetaList meta;
     };
 
     DynamicArtists& dynamicArtists() {
@@ -1029,7 +1045,6 @@ namespace {
                 std::lock_guard<std::mutex> lock(d.m);
                 d.track = p_track;
                 d.artists.clear();
-                d.meta.clear();
             }
             ++g_generation;
         }
@@ -1039,19 +1054,16 @@ namespace {
                 std::lock_guard<std::mutex> lock(d.m);
                 d.track.release();
                 d.artists.clear();
-                d.meta.clear();
             }
             ++g_generation;
         }
         void on_playback_dynamic_info_track(const file_info& p_info) override {
             std::vector<std::string> artists;
-            MetaList meta;
             const t_size total = p_info.meta_get_count();
             for (t_size i = 0; i < total; ++i) {
                 const t_size values = p_info.meta_enum_value_count(i);
                 if (values == 0) continue;
                 const std::string name = lower(p_info.meta_enum_name(i));
-                meta.emplace_back(name, std::string(p_info.meta_enum_value(i, 0)));
                 if (name == "artist")
                     for (t_size k = 0; k < values; ++k) artists.emplace_back(p_info.meta_enum_value(i, k));
             }
@@ -1059,7 +1071,6 @@ namespace {
             {
                 std::lock_guard<std::mutex> lock(d.m);
                 d.artists = std::move(artists);
-                d.meta = std::move(meta);
             }
             ++g_generation;
         }
@@ -1072,55 +1083,6 @@ namespace {
         void on_volume_change(float) override {}
     };
     play_callback_static_factory_t<dynamic_artist_callback> g_dynamic_artist_callback;
-
-    bool dynamicOverlayFor(metadb_handle* h, MetaList& out) {
-        DynamicArtists& d = dynamicArtists();
-        std::lock_guard<std::mutex> lock(d.m);
-        if (!d.track.is_valid() || d.track.get_ptr() != h) return false;
-        out = d.meta;
-        return true;
-    }
-
-    class dynamic_overlay_hook : public titleformat_hook {
-    public:
-        explicit dynamic_overlay_hook(MetaList items) : m_items(std::move(items)) {}
-
-        bool process_field(titleformat_text_out* p_out, const char* p_name, t_size p_name_length, bool& p_found_flag) override {
-            if (p_name_length == 9 && _strnicmp(p_name, "isplaying", 9) == 0) {
-                p_out->write(titleformat_inputtypes::meta, "1", 1);
-                p_found_flag = true;
-                return true;
-            }
-            const std::string* v = find(std::string(p_name, p_name_length));
-            if (!v) return false;
-            p_out->write(titleformat_inputtypes::meta, v->c_str(), v->length());
-            p_found_flag = true;
-            return true;
-        }
-
-        bool process_function(titleformat_text_out* p_out, const char* p_name, t_size p_name_length,
-            titleformat_hook_function_params* p_params, bool& p_found_flag) override {
-            if (p_name_length != 4 || _strnicmp(p_name, "meta", 4) != 0) return false;
-            if (p_params->get_param_count() < 1) return false;
-            const char* field = nullptr;
-            t_size fieldLength = 0;
-            p_params->get_param(0, field, fieldLength);
-            if (p_params->get_param_count() >= 2 && p_params->get_param_uint(1) != 0) return false;
-            const std::string* v = find(std::string(field, fieldLength));
-            if (!v) return false;
-            p_out->write(titleformat_inputtypes::meta, v->c_str(), v->length());
-            p_found_flag = true;
-            return true;
-        }
-
-    private:
-        const std::string* find(const std::string& name) const {
-            const std::string key = lower(name);
-            for (const auto& kv : m_items) if (kv.first == key) return &kv.second;
-            return nullptr;
-        }
-        MetaList m_items;
-    };
 
     std::vector<std::string> artistLookupCountries(metadb_handle* h) {
         std::vector<std::string> countries;
@@ -1293,7 +1255,6 @@ namespace {
             std::lock_guard<std::mutex> lock(d.m);
             d.track.release();
             d.artists.clear();
-            d.meta.clear();
         }
     };
     initquit_factory_t<quit_cleanup> g_quit_cleanup;
@@ -1301,14 +1262,7 @@ namespace {
     std::string evalCompiled(metadb_handle* h, const titleformat_object::ptr& script) {
         if (script.is_empty()) return {};
         pfc::string8 result;
-        MetaList overlay;
-        if (dynamicOverlayFor(h, overlay)) {
-            dynamic_overlay_hook hook(std::move(overlay));
-            h->format_title(&hook, result, script, nullptr);
-        }
-        else {
-            h->format_title(nullptr, result, script, nullptr);
-        }
+        h->format_title(nullptr, result, script, nullptr);
         return trim(result.c_str());
     }
 
@@ -1414,6 +1368,12 @@ namespace {
     constexpr int ID_ORDER_WORLD = 1041;
     constexpr int ID_ORDER_FLAT = 1042;
     constexpr int ID_TAB = 1050;
+    constexpr int ID_FIELDLIST = 1074;
+    constexpr int ID_COPYFIELD = 1075;
+    constexpr int ID_IMPORT = 1072;
+    constexpr int ID_EXPORT = 1073;
+    constexpr UINT_PTR kPreviewTimer = 77;       // repeating: keeps the preview in step with the selected track
+    constexpr UINT_PTR kPreviewSoon = 78;        // one-shot: shortly after a script was edited
     constexpr int ID_EDITSCRIPT_BASE = 1060;   // 1060..1069: the "..." buttons (slot 0-4 sources, 5-9 fallbacks)
     constexpr const char* kFixedText = "(fixed - no suffix)";
 
@@ -1429,58 +1389,324 @@ namespace {
     }
 
 
-    // ---- Large script editor (modal, resizable) ----
+    // Field kinds published per source (the order is the field index order of the provider).
+    constexpr size_t kFieldKindCount = 9;
+    const char* const kFieldKindNames[kFieldKindCount] = {
+        "emoji", "path", "name", "iso2", "iso3", "region", "subregion", "argument", "fallbackargument" };
+    const char* const kFieldKindInfo[kFieldKindCount] = {
+        "Flag emoji (several countries are separated by a space)",
+        "Full path of the flag image, only if the file exists",
+        "English country name",
+        "ISO 3166-1 alpha-2 code, e.g. GR",
+        "ISO 3166-1 alpha-3 code, e.g. GRC",
+        "Cultural region, e.g. Europe",
+        "Cultural subregion, e.g. Southern Europe",
+        "Debug: raw result of the source's titleformat script",
+        "Debug: raw result of the fallback script (empty when it did not run)" };
+
+    // ---- Shared UI font for the component's own dialogs: the system message font (as used by the
+    // preferences tree) at the DPI of the window it is shown on ----
+    UINT uiDpiFor(HWND wnd) {
+        using GetDpiForWindowFn = UINT(WINAPI*)(HWND);
+        static const auto fn = []() -> GetDpiForWindowFn {
+            const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+            return user32 ? reinterpret_cast<GetDpiForWindowFn>(GetProcAddress(user32, "GetDpiForWindow")) : nullptr;
+            }();
+        if (fn && wnd) {
+            const UINT dpi = fn(wnd);
+            if (dpi != 0) return dpi;
+        }
+        HDC dc = GetDC(wnd);
+        const int logpix = dc ? GetDeviceCaps(dc, LOGPIXELSX) : 96;
+        if (dc) ReleaseDC(wnd, dc);
+        return logpix > 0 ? static_cast<UINT>(logpix) : 96;
+    }
+
+    HFONT createUiFont(UINT dpi) {
+        LOGFONTW lf{};
+        NONCLIENTMETRICSW ncm{};
+        ncm.cbSize = sizeof(ncm);
+        using SpiForDpiFn = BOOL(WINAPI*)(UINT, UINT, PVOID, UINT, UINT);
+        static const auto spiForDpi = []() -> SpiForDpiFn {
+            const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+            return user32 ? reinterpret_cast<SpiForDpiFn>(GetProcAddress(user32, "SystemParametersInfoForDpi")) : nullptr;
+            }();
+        if (spiForDpi && spiForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, dpi)) lf = ncm.lfMessageFont;
+        else if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) lf = ncm.lfMessageFont;
+        else GetObjectW(GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
+        return CreateFontIndirectW(&lf);
+    }
+
+    // ---- Themed message box (MessageBox does not follow foobar2000's dark mode) ----
+    // Returns IDYES / IDNO for a Yes/No box and IDOK for an OK box.
+    class themed_message {
+    public:
+        static int show(HWND owner, const char* title, const std::string& text, bool yesNo, LPCWSTR icon) {
+            themed_message box(owner, title, text, yesNo, icon);
+            return box.run();
+        }
+
+    private:
+        themed_message(HWND owner, const char* title, const std::string& text, bool yesNo, LPCWSTR icon) :
+            m_owner(owner), m_yesNo(yesNo), m_icon(icon),
+            m_title(pfc::stringcvt::string_wide_from_utf8(title).get_ptr()),
+            m_text(pfc::stringcvt::string_wide_from_utf8(text.c_str()).get_ptr()),
+            m_brDark(CreateSolidBrush(RGB(32, 32, 32))) {
+        }
+        ~themed_message() { if (m_brDark) DeleteObject(m_brDark); if (m_font) DeleteObject(m_font); }
+        themed_message(const themed_message&) = delete;
+        themed_message& operator=(const themed_message&) = delete;
+
+        static int dpiOf(HWND wnd) { return static_cast<int>(uiDpiFor(wnd)); }
+
+        HWND addChild(LPCWSTR cls, LPCWSTR text, DWORD style, int x, int y, int w, int h, int id) {
+            HWND c = CreateWindowExW(0, cls, text, WS_CHILD | WS_VISIBLE | style, x, y, w, h, m_wnd,
+                reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), core_api::get_my_instance(), nullptr);
+            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(m_font ? m_font : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT))), TRUE);
+            return c;
+        }
+
+        int run() {
+            static const bool registered = [] {
+                WNDCLASSW wc{};
+                wc.lpfnWndProc = proc;
+                wc.hInstance = core_api::get_my_instance();
+                wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
+                wc.lpszClassName = L"foo_countryflags_message";
+                return RegisterClassW(&wc) != 0;
+                }();
+            (void)registered;
+
+            const int dpi = dpiOf(m_owner ? m_owner : GetDesktopWindow());
+            auto S = [dpi](int v) { return MulDiv(v, dpi, 96); };
+            const int margin = S(14), gap = S(12), textW = S(360), btnW = S(84), btnH = S(26), iconSz = S(32);
+            m_font = createUiFont(static_cast<UINT>(dpi));
+
+            int textH = 0;
+            {
+                HDC dc = GetDC(nullptr);
+                HGDIOBJ old = SelectObject(dc, m_font ? static_cast<HGDIOBJ>(m_font) : GetStockObject(DEFAULT_GUI_FONT));
+                RECT rc{ 0, 0, textW, 0 };
+                DrawTextW(dc, m_text.c_str(), -1, &rc, DT_CALCRECT | DT_WORDBREAK | DT_NOPREFIX);
+                textH = rc.bottom;
+                SelectObject(dc, old);
+                ReleaseDC(nullptr, dc);
+            }
+            const int contentH = (std::max)(textH, iconSz);
+            const int clientW = margin + iconSz + gap + textW + margin;
+            const int clientH = margin + contentH + gap + btnH + margin;
+
+            const DWORD style = WS_POPUP | WS_CAPTION | WS_SYSMENU;
+            const DWORD exStyle = WS_EX_DLGMODALFRAME;
+            RECT wr{ 0, 0, clientW, clientH };
+            AdjustWindowRectEx(&wr, style, FALSE, exStyle);
+            const int w = wr.right - wr.left, h = wr.bottom - wr.top;
+
+            RECT area{};
+            if (!m_owner || !GetWindowRect(m_owner, &area)) SystemParametersInfoW(SPI_GETWORKAREA, 0, &area, 0);
+            const int x = area.left + ((area.right - area.left) - w) / 2;
+            const int y = area.top + ((area.bottom - area.top) - h) / 2;
+
+            m_wnd = CreateWindowExW(exStyle, L"foo_countryflags_message", m_title.c_str(), style, x, y, w, h,
+                m_owner, nullptr, core_api::get_my_instance(), this);
+            if (!m_wnd) return m_yesNo ? IDNO : IDOK;
+
+            HWND icon = addChild(L"STATIC", nullptr, SS_ICON, margin, margin, iconSz, iconSz, 0);
+            SendMessageW(icon, STM_SETICON, reinterpret_cast<WPARAM>(LoadImageW(nullptr, m_icon, IMAGE_ICON, iconSz, iconSz, LR_SHARED)), 0);
+            addChild(L"STATIC", m_text.c_str(), SS_LEFT | SS_NOPREFIX, margin + iconSz + gap,
+                margin + (contentH - textH) / 2, textW, textH, 0);
+
+            const int btnY = clientH - margin - btnH;
+            const int lastX = clientW - margin - btnW;
+            HWND defButton = nullptr;
+            if (m_yesNo) {
+                defButton = addChild(L"BUTTON", L"Yes", WS_TABSTOP | BS_DEFPUSHBUTTON, lastX - S(8) - btnW, btnY, btnW, btnH, IDYES);
+                addChild(L"BUTTON", L"No", WS_TABSTOP | BS_PUSHBUTTON, lastX, btnY, btnW, btnH, IDNO);
+            }
+            else {
+                defButton = addChild(L"BUTTON", L"OK", WS_TABSTOP | BS_DEFPUSHBUTTON, lastX, btnY, btnW, btnH, IDOK);
+            }
+            m_dark.AddDialogWithControls(m_wnd);
+
+            if (m_owner) EnableWindow(m_owner, FALSE);
+            ShowWindow(m_wnd, SW_SHOW);
+            SetForegroundWindow(m_wnd);
+            SetFocus(defButton);
+
+            MSG msg;
+            while (!m_done) {
+                const BOOL got = GetMessageW(&msg, nullptr, 0, 0);
+                if (got <= 0) {
+                    if (got == 0) PostQuitMessage((int)msg.wParam);
+                    break;
+                }
+                if (!IsDialogMessageW(m_wnd, &msg)) {
+                    TranslateMessage(&msg);
+                    DispatchMessageW(&msg);
+                }
+            }
+
+            if (m_owner) EnableWindow(m_owner, TRUE);
+            DestroyWindow(m_wnd);
+            m_wnd = nullptr;
+            if (m_owner) SetForegroundWindow(m_owner);
+            return m_result ? m_result : (m_yesNo ? IDNO : IDOK);
+        }
+
+        static LRESULT CALLBACK proc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+            auto* self = reinterpret_cast<themed_message*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
+            if (msg == WM_NCCREATE) {
+                self = static_cast<themed_message*>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams);
+                SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
+            }
+            return self ? self->handle(wnd, msg, wp, lp) : DefWindowProcW(wnd, msg, wp, lp);
+        }
+
+        LRESULT handle(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
+            const bool dark = m_dark;
+            switch (msg) {
+            case WM_ERASEBKGND: {
+                RECT rc{};
+                GetClientRect(wnd, &rc);
+                FillRect(reinterpret_cast<HDC>(wp), &rc, dark ? m_brDark : GetSysColorBrush(COLOR_BTNFACE));
+                return 1;
+            }
+            case WM_CTLCOLORSTATIC: {
+                HDC dc = reinterpret_cast<HDC>(wp);
+                if (dark) SetTextColor(dc, RGB(240, 240, 240));
+                SetBkMode(dc, TRANSPARENT);
+                return reinterpret_cast<LRESULT>(dark ? m_brDark : GetSysColorBrush(COLOR_BTNFACE));
+            }
+            case WM_COMMAND: {
+                int id = LOWORD(wp);
+                if (id == IDCANCEL) id = m_yesNo ? IDNO : IDOK;
+                else if (id == IDOK && m_yesNo) id = IDYES;
+                if (id == IDYES || id == IDNO || id == IDOK) {
+                    m_result = id;
+                    m_done = true;
+                    return 0;
+                }
+                break;
+            }
+            case WM_CLOSE:
+                m_result = m_yesNo ? IDNO : IDOK;
+                m_done = true;
+                return 0;
+            }
+            return DefWindowProcW(wnd, msg, wp, lp);
+        }
+
+        HWND m_owner;
+        bool m_yesNo;
+        LPCWSTR m_icon;
+        std::wstring m_title, m_text;
+        HBRUSH m_brDark;
+        HFONT m_font = nullptr;
+        HWND m_wnd = nullptr;
+        int m_result = 0;
+        bool m_done = false;
+        fb2k::CCoreDarkModeHooks m_dark;
+    };
+
+    // ---- Preview helpers (used by the preferences page and the script editor) ----
+
+    // The track a preview is evaluated for: a selected track always wins, even while another track
+    // is playing (active playlist selection, then any other selection, then the focused playlist
+    // row); the playing track is used when none of these exist.
+    metadb_handle_ptr pickPreviewTrack() {
+        metadb_handle_ptr playing;
+        playback_control::get()->get_now_playing(playing);
+        metadb_handle_list sel;
+        playlist_manager::get()->activeplaylist_get_selected_items(sel);
+        if (sel.get_count() == 0) ui_selection_manager::get()->get_selection(sel);
+        if (sel.get_count() > 0) return sel[0];
+        metadb_handle_ptr focused;
+        if (playlist_manager::get()->activeplaylist_get_focus_item_handle(focused) && focused.is_valid()) return focused;
+        return playing;
+    }
+
+    std::string describeCountries(const std::vector<std::string>& isos) {
+        std::string out;
+        for (const auto& iso : isos) {
+            if (!out.empty()) out += ", ";
+            out += iso;
+            const auto it = db().a2name.find(iso);
+            if (it != db().a2name.end()) out += " (" + it->second + ")";
+        }
+        return out;
+    }
+
+    std::string trackTitle(metadb_handle* track) {
+        titleformat_object::ptr nameScript;
+        titleformat_compiler::get()->compile_safe(nameScript, "%artist% - %title%");
+        return evalCompiled(track, nameScript);
+    }
+
+    // Evaluates script text (flattened first); returns false when it does not compile.
+    bool evalScriptText(metadb_handle* track, const std::string& text, std::string& value) {
+        value.clear();
+        const std::string flat = flattenScript(text);
+        if (flat.empty()) return true;
+        titleformat_object::ptr obj;
+        if (!titleformat_compiler::get()->compile(obj, flat.c_str())) return false;
+        value = evalCompiled(track, obj);
+        return true;
+    }
+
+    // One preview line for a source: what the script returned and which countries that gives,
+    // including the fallback when the script alone finds none.
+    std::string previewSourceLine(metadb_handle* track, int number, const std::string& script, const std::string& fallback) {
+        std::string line = "Source " + std::to_string(number) + ": ";
+        if (flattenScript(script).empty() && flattenScript(fallback).empty()) return line + "(no script)";
+        std::string value;
+        if (!evalScriptText(track, script, value)) return line + "(the script does not compile)";
+        line += value.empty() ? std::string("(empty)") : value;
+        const std::vector<std::string> countries = parseCountryList(value);
+        if (!countries.empty()) return line + " -> " + describeCountries(countries);
+        if (flattenScript(fallback).empty()) return line + " -> (no country)";
+        std::string fvalue;
+        if (!evalScriptText(track, fallback, fvalue)) return line + " | fallback does not compile";
+        line += " | fallback: " + (fvalue.empty() ? std::string("(empty)") : fvalue);
+        const std::vector<std::string> found = fvalue.empty() ? std::vector<std::string>() : lookupArtistName(fvalue);
+        return line + (found.empty() ? std::string(" -> (not found)") : " -> " + describeCountries(found));
+    }
+
+    // ---- Large script editor (modal, resizable) with live preview ----
     constexpr int ID_SE_EDIT = 3001;
     constexpr int ID_SE_HINT = 3002;
-    constexpr int ID_SE_TEST = 3003;
+    constexpr int ID_SE_PLABEL = 3003;
     constexpr int ID_SE_RESULT = 3004;
+    constexpr UINT_PTR kSePreviewTimer = 1;
 
     struct ScriptEditorState {
         std::string text;
         bool accepted = false;
         int kind = 0;               // 0 = titleformat script (country), 1 = fallback script (artist name)
-        HFONT font = nullptr;
+        HFONT font = nullptr;       // monospace font of the script box
+        HFONT uiFont = nullptr;     // font of the labels, preview and buttons
         fb2k::CCoreDarkModeHooks dark;
     };
 
-    // Evaluates the script text from the editor (saved or not) on the selected playlist item, or the
-    // playing track, and describes what the component would make of it.
+    // Evaluates the script text from the editor (saved or not) and describes what the component
+    // would make of it.
     std::string scriptTestReport(const std::string& text, int kind) {
-        metadb_handle_ptr track;
-        metadb_handle_list sel;
-        playlist_manager::get()->activeplaylist_get_selected_items(sel);
-        if (sel.get_count() > 0) track = sel[0];
-        else playback_control::get()->get_now_playing(track);
-        if (track.is_empty()) return "Select a track in the playlist (or start playback), then press Test.";
+        const metadb_handle_ptr track = pickPreviewTrack();
+        if (track.is_empty()) return "Select a track in the playlist (or start playback) to see a preview.";
 
         const std::string flat = flattenScript(text);
         if (flat.empty()) return "(empty script)";
         titleformat_object::ptr obj;
         if (!titleformat_compiler::get()->compile(obj, flat.c_str())) return "The script does not compile.";
 
-        titleformat_object::ptr nameScript;
-        titleformat_compiler::get()->compile_safe(nameScript, "%artist% - %title%");
-        std::string report = "Track: " + evalCompiled(track.get_ptr(), nameScript);
-
+        std::string report = "Track: " + trackTitle(track.get_ptr());
         const std::string value = evalCompiled(track.get_ptr(), obj);
         report += "\r\nResult: " + (value.empty() ? std::string("(empty)") : value);
-
-        auto describe = [](const std::vector<std::string>& isos) {
-            std::string out;
-            for (const auto& iso : isos) {
-                if (!out.empty()) out += ", ";
-                out += iso;
-                const auto it = db().a2name.find(iso);
-                if (it != db().a2name.end()) out += " (" + it->second + ")";
-            }
-            return out;
-            };
         if (kind == 0) {
-            const std::string countries = describe(parseCountryList(value));
+            const std::string countries = describeCountries(parseCountryList(value));
             report += "\r\nCountries: " + (countries.empty() ? std::string("(none recognised - the fallback script would run)") : countries);
         }
         else {
-            const std::string countries = value.empty() ? std::string() : describe(lookupArtistName(value));
+            const std::string countries = value.empty() ? std::string() : describeCountries(lookupArtistName(value));
             report += "\r\nArtist tables: " + (countries.empty() ? std::string("(artist not found)") : countries);
         }
         return report;
@@ -1504,21 +1730,40 @@ namespace {
         return dpi > 0 ? dpi : 96;
     }
 
+    std::string editControlText(HWND edit) {
+        const int len = GetWindowTextLengthW(edit);
+        std::wstring wide(static_cast<size_t>(len) + 1, L'\0');
+        GetWindowTextW(edit, wide.data(), len + 1);
+        wide.resize(len);
+        pfc::stringcvt::string_utf8_from_wide utf8(wide.c_str());
+        std::string text;
+        for (const char* c = utf8.get_ptr(); *c; ++c) if (*c != '\r') text += *c;
+        return text;
+    }
+
+    void scriptEditorUpdatePreview(HWND dlg, const ScriptEditorState* st) {
+        if (!st) return;
+        const std::string report = scriptTestReport(editControlText(GetDlgItem(dlg, ID_SE_EDIT)), st->kind);
+        pfc::stringcvt::string_wide_from_utf8 out(report.c_str());
+        SetWindowTextW(GetDlgItem(dlg, ID_SE_RESULT), out.get_ptr());
+    }
+
     void scriptEditorLayout(HWND dlg) {
         RECT rc{};
         GetClientRect(dlg, &rc);
         const int dpi = editorDpi(dlg);
         auto S = [&](int v) { return MulDiv(v, dpi, 96); };
-        const int margin = S(10), btnW = S(80), btnH = S(26), hintH = S(34), resultH = S(84), testW = S(130);
+        const int margin = S(10), btnW = S(80), btnH = S(26), hintH = S(34), labelH = S(18), resultH = S(84);
         const int w = rc.right, h = rc.bottom;
         const int buttonsY = h - margin - btnH;
         const int resultY = buttonsY - margin - resultH;
-        const int hintY = resultY - S(6) - hintH;
+        const int labelY = resultY - S(2) - labelH;
+        const int hintY = labelY - S(4) - hintH;
         SetWindowPos(GetDlgItem(dlg, ID_SE_EDIT), nullptr, margin, margin, w - 2 * margin,
             (std::max)(S(40), hintY - S(6) - margin), SWP_NOZORDER);
         SetWindowPos(GetDlgItem(dlg, ID_SE_HINT), nullptr, margin, hintY, w - 2 * margin, hintH, SWP_NOZORDER);
+        SetWindowPos(GetDlgItem(dlg, ID_SE_PLABEL), nullptr, margin, labelY, w - 2 * margin, labelH, SWP_NOZORDER);
         SetWindowPos(GetDlgItem(dlg, ID_SE_RESULT), nullptr, margin, resultY, w - 2 * margin, resultH, SWP_NOZORDER);
-        SetWindowPos(GetDlgItem(dlg, ID_SE_TEST), nullptr, margin, buttonsY, testW, btnH, SWP_NOZORDER);
         SetWindowPos(GetDlgItem(dlg, IDOK), nullptr, w - 2 * margin - 2 * btnW, buttonsY, btnW, btnH, SWP_NOZORDER);
         SetWindowPos(GetDlgItem(dlg, IDCANCEL), nullptr, w - margin - btnW, buttonsY, btnW, btnH, SWP_NOZORDER);
     }
@@ -1530,9 +1775,10 @@ namespace {
             st = reinterpret_cast<ScriptEditorState*>(lp);
             SetWindowLongPtrW(dlg, DWLP_USER, reinterpret_cast<LONG_PTR>(st));
             HINSTANCE inst = core_api::get_my_instance();
-            HGDIOBJ gui = GetStockObject(DEFAULT_GUI_FONT);
-
             const int dpi = editorDpi(dlg);
+            st->uiFont = createUiFont(static_cast<UINT>(dpi));
+            HGDIOBJ gui = st->uiFont ? static_cast<HGDIOBJ>(st->uiFont) : GetStockObject(DEFAULT_GUI_FONT);
+
             st->font = CreateFontW(-MulDiv(10, dpi, 72), 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
                 DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, FIXED_PITCH | FF_MODERN, L"Consolas");
 
@@ -1556,9 +1802,9 @@ namespace {
                 WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX, 0, 0, 10, 10, dlg,
                 reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_HINT)), inst, nullptr);
             SendMessageW(hint, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
-            HWND test = CreateWindowExW(0, L"BUTTON", L"Test on selected track", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_TEST)), inst, nullptr);
-            SendMessageW(test, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+            HWND plabel = CreateWindowExW(0, L"STATIC", L"Preview:", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+                0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_PLABEL)), inst, nullptr);
+            SendMessageW(plabel, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
             HWND result = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
                 WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
                 0, 0, 10, 10, dlg, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_SE_RESULT)), inst, nullptr);
@@ -1572,6 +1818,7 @@ namespace {
 
             scriptEditorLayout(dlg);
             st->dark.AddDialogWithControls(dlg);
+            scriptEditorUpdatePreview(dlg, st);
             SetFocus(edit);
             SendMessageW(edit, EM_SETSEL, 0, 0);
             return FALSE;   // focus was set explicitly
@@ -1583,42 +1830,33 @@ namespace {
             const int dpi = editorDpi(dlg);
             auto* mm = reinterpret_cast<MINMAXINFO*>(lp);
             mm->ptMinTrackSize.x = MulDiv(360, dpi, 96);
-            mm->ptMinTrackSize.y = MulDiv(300, dpi, 96);
+            mm->ptMinTrackSize.y = MulDiv(420, dpi, 96);
             return TRUE;
         }
-        case WM_COMMAND:
-            if (LOWORD(wp) == IDOK && st) {
-                HWND edit = GetDlgItem(dlg, ID_SE_EDIT);
-                const int len = GetWindowTextLengthW(edit);
-                std::wstring wide(static_cast<size_t>(len) + 1, L'\0');
-                GetWindowTextW(edit, wide.data(), len + 1);
-                wide.resize(len);
-                pfc::stringcvt::string_utf8_from_wide utf8(wide.c_str());
-                std::string text;
-                for (const char* c = utf8.get_ptr(); *c; ++c) if (*c != '\r') text += *c;
-                st->text = text;
-                st->accepted = true;
-                EndDialog(dlg, IDOK);
+        case WM_TIMER:
+            if (wp == kSePreviewTimer) {
+                KillTimer(dlg, kSePreviewTimer);
+                scriptEditorUpdatePreview(dlg, st);
                 return TRUE;
             }
-            if (LOWORD(wp) == ID_SE_TEST && HIWORD(wp) == BN_CLICKED && st) {
-                HWND edit = GetDlgItem(dlg, ID_SE_EDIT);
-                const int len = GetWindowTextLengthW(edit);
-                std::wstring wide(static_cast<size_t>(len) + 1, L'\0');
-                GetWindowTextW(edit, wide.data(), len + 1);
-                wide.resize(len);
-                pfc::stringcvt::string_utf8_from_wide utf8(wide.c_str());
-                std::string text;
-                for (const char* c = utf8.get_ptr(); *c; ++c) if (*c != '\r') text += *c;
-                const std::string report = scriptTestReport(text, st->kind);
-                pfc::stringcvt::string_wide_from_utf8 out(report.c_str());
-                SetWindowTextW(GetDlgItem(dlg, ID_SE_RESULT), out.get_ptr());
+            break;
+        case WM_COMMAND:
+            if (LOWORD(wp) == ID_SE_EDIT && HIWORD(wp) == EN_CHANGE) {
+                SetTimer(dlg, kSePreviewTimer, 300, nullptr);   // evaluate shortly after typing stops
+                return TRUE;
+            }
+            if (LOWORD(wp) == IDOK && st) {
+                st->text = editControlText(GetDlgItem(dlg, ID_SE_EDIT));
+                st->accepted = true;
+                EndDialog(dlg, IDOK);
                 return TRUE;
             }
             if (LOWORD(wp) == IDCANCEL) { EndDialog(dlg, IDCANCEL); return TRUE; }
             break;
         case WM_DESTROY:
+            KillTimer(dlg, kSePreviewTimer);
             if (st && st->font) { DeleteObject(st->font); st->font = nullptr; }
+            if (st && st->uiFont) { DeleteObject(st->uiFont); st->uiFont = nullptr; }
             break;
         }
         return FALSE;
@@ -1632,7 +1870,7 @@ namespace {
         push32(0);
         tpl.push_back(0);                                   // no template items
         tpl.push_back(0); tpl.push_back(0);                 // x, y
-        tpl.push_back(293); tpl.push_back(227);             // cx, cy in dialog units
+        tpl.push_back(293); tpl.push_back(250);             // cx, cy in dialog units
         tpl.push_back(0); tpl.push_back(0);                 // no menu, default class
         for (const wchar_t* c = title; *c; ++c) tpl.push_back(static_cast<WORD>(*c));
         tpl.push_back(0);
@@ -1650,18 +1888,23 @@ namespace {
         return true;
     }
 
+#ifndef WM_DPICHANGED_AFTERPARENT
+#define WM_DPICHANGED_AFTERPARENT 0x0050
+#endif
+
     class country_flags_preferences_instance : public preferences_page_instance {
     public:
         country_flags_preferences_instance(HWND parent, preferences_page_callback::ptr callback)
-            : m_callback(callback), m_wnd(nullptr), m_tabWnd(nullptr), m_tab1Wnd(nullptr), m_tab2Wnd(nullptr),
+            : m_callback(callback), m_wnd(nullptr), m_tabWnd(nullptr), m_tab1Wnd(nullptr), m_tab2Wnd(nullptr), m_tab3Wnd(nullptr), m_fieldList(nullptr), m_fieldHint(nullptr), m_copyBtn(nullptr),
             m_ready(false), m_originalOrder(0),
             m_note(nullptr), m_boldFont(nullptr), m_settingScript(false),
+            m_previewLabel(nullptr), m_previewBox(nullptr), m_importBtn(nullptr), m_exportBtn(nullptr),
             m_flagLabel(nullptr), m_artistLabel(nullptr), m_artist2Label(nullptr),
             m_orderLabel(nullptr), m_orderWorld(nullptr), m_orderFlat(nullptr),
             m_statusFlag(nullptr), m_statusArtist(nullptr), m_statusArtist2(nullptr),
             m_statusFont(nullptr), m_brDark(CreateSolidBrush(RGB(32, 32, 32))) {
 
-            INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_TAB_CLASSES };
+            INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES };
             InitCommonControlsEx(&icc);
 
             std::memset(m_rowLabel, 0, sizeof(m_rowLabel));
@@ -1700,11 +1943,13 @@ namespace {
                 0, 0, initW, initH, parent, nullptr, hInstance, this);
 
             if (m_wnd) {
+                m_parent = parent;
+                buildFonts();
                 m_tabWnd = CreateWindowExW(0, WC_TABCONTROLW, L"",
                     WS_CHILD | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                     0, 0, initW, initH, m_wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_TAB)),
                     hInstance, nullptr);
-                SendMessageW(m_tabWnd, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+                SendMessageW(m_tabWnd, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
 
                 SetWindowTheme(m_tabWnd, isDarkMode() ? L"DarkMode_Explorer" : L"", nullptr);
                 SetWindowSubclass(m_tabWnd, TabControlSubclassProc, 1, reinterpret_cast<DWORD_PTR>(this));
@@ -1715,6 +1960,8 @@ namespace {
                 TabCtrl_InsertItem(m_tabWnd, 0, &tie);
                 tie.pszText = const_cast<LPWSTR>(L"Folders");
                 TabCtrl_InsertItem(m_tabWnd, 1, &tie);
+                tie.pszText = const_cast<LPWSTR>(L"Fields");
+                TabCtrl_InsertItem(m_tabWnd, 2, &tie);
 
                 RECT rcTab{};
                 GetClientRect(m_tabWnd, &rcTab);
@@ -1731,18 +1978,27 @@ namespace {
                     WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                     rcTab.left, rcTab.top, tabW, tabH, m_tabWnd, nullptr, hInstance, this);
                 ShowWindow(m_tab2Wnd, SW_HIDE);
+                m_tab3Wnd = CreateWindowExW(0, L"CountryFlagsTabChildPage", L"",
+                    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    rcTab.left, rcTab.top, tabW, tabH, m_tabWnd, nullptr, hInstance, this);
+                ShowWindow(m_tab3Wnd, SW_HIDE);
                 createTab1Controls();
                 createTab2Controls();
+                createTab3Controls();
 
                 loadValues(false);
                 updateStatus();
+                refreshFieldList();
 
                 m_darkMode.AddDialogWithControls(m_wnd);
                 m_tab1DarkMode.AddDialogWithControls(m_tab1Wnd);
                 m_tab2DarkMode.AddDialogWithControls(m_tab2Wnd);
+                m_tab3DarkMode.AddDialogWithControls(m_tab3Wnd);
                 m_ready = true;
 
                 layoutControls(initW, initH);
+                updatePreview();
+                SetTimer(m_wnd, kPreviewTimer, 1500, nullptr);
             }
         }
 
@@ -1754,6 +2010,7 @@ namespace {
         ~country_flags_preferences_instance() {
             if (m_statusFont) DeleteObject(m_statusFont);
             if (m_boldFont) DeleteObject(m_boldFont);
+            if (m_uiFont) DeleteObject(m_uiFont);
             if (m_brDark) DeleteObject(m_brDark);
         }
 
@@ -1767,6 +2024,8 @@ namespace {
 
         void apply() override {
             if (!m_wnd) return;
+            std::string fieldsBefore[5];
+            for (size_t i = 0; i < 5; ++i) fieldsBefore[i] = fieldPrefix(i);
             saveEdit(ID_SOURCE1, g_cfgSource1);
             saveEdit(ID_SOURCE2, g_cfgSource2);
             saveEdit(ID_SOURCE3, g_cfgSource3);
@@ -1795,6 +2054,23 @@ namespace {
             ++g_generation;
             captureOriginals();
             if (m_callback.is_valid()) m_callback->on_state_changed();
+
+            // Field names are only read at startup, so a changed suffix needs a restart.
+            // The settings are written on exit, so the new suffixes survive it.
+            bool renamed = false;
+            for (size_t i = 0; i < 5; ++i)
+                if (fieldPrefix(i) != fieldsBefore[i]) { renamed = true; break; }
+            if (renamed) {
+                HWND owner = m_wnd ? GetAncestor(m_wnd, GA_ROOT) : nullptr;
+                const int answer = themed_message::show(owner, "Country Flags",
+                    "A field suffix was changed. foobar2000 reads field names at startup, so the new names only take effect after a restart.\n\nRestart foobar2000 now?",
+                    true, IDI_QUESTION);
+                if (answer == IDYES) {
+                    fb2k::inMainThread([] {
+                        standard_commands::run_main(standard_commands::guid_main_restart);
+                        });
+                }
+            }
         }
 
         void reset() override {
@@ -1899,8 +2175,9 @@ namespace {
             }
 
             // Forward commands and notifications from child tabs up to main preferences handler
-            if ((wnd == m_tab1Wnd || wnd == m_tab2Wnd)) {
-                if (msg == WM_COMMAND && m_wnd) {
+            if ((wnd == m_tab1Wnd || wnd == m_tab2Wnd || wnd == m_tab3Wnd)) {
+                if (msg == WM_SIZE && wnd == m_tab3Wnd) layoutFieldsTab();
+                if ((msg == WM_COMMAND || msg == WM_NOTIFY) && m_wnd) {
                     return SendMessageW(m_wnd, msg, wp, lp);
                 }
                 return DefWindowProcW(wnd, msg, wp, lp);
@@ -1916,7 +2193,24 @@ namespace {
                     int sel = TabCtrl_GetCurSel(m_tabWnd);
                     ShowWindow(m_tab1Wnd, sel == 0 ? SW_SHOW : SW_HIDE);
                     ShowWindow(m_tab2Wnd, sel == 1 ? SW_SHOW : SW_HIDE);
+                    ShowWindow(m_tab3Wnd, sel == 2 ? SW_SHOW : SW_HIDE);
+                    if (sel == 2) { ensureFieldList(); layoutFieldsTab(); refreshFieldList(); }
                     return 0;
+                }
+                if (nm && nm->idFrom == ID_FIELDLIST) {
+                    if (nm->code == NM_DBLCLK) { copySelectedFields(); return 0; }
+                    if (nm->code == LVN_ITEMCHANGED) {
+                        EnableWindow(m_copyBtn, ListView_GetSelectedCount(m_fieldList) > 0);
+                        return 0;
+                    }
+                    if (nm->code == LVN_KEYDOWN) {
+                        const auto* kd = reinterpret_cast<const NMLVKEYDOWN*>(lp);
+                        if (GetKeyState(VK_CONTROL) & 0x8000) {
+                            if (kd->wVKey == 'C' || kd->wVKey == VK_INSERT) copySelectedFields();
+                            else if (kd->wVKey == 'A') ListView_SetItemState(m_fieldList, -1, LVIS_SELECTED, LVIS_SELECTED);
+                        }
+                        return 0;
+                    }
                 }
             }
             if (msg == WM_COMMAND && HIWORD(wp) == BN_CLICKED) {
@@ -1928,6 +2222,9 @@ namespace {
                 case ID_ORDER_FLAT:
                     if (m_ready && m_callback.is_valid()) m_callback->on_state_changed();
                     return 0;
+                case ID_COPYFIELD: copySelectedFields(); return 0;
+                case ID_IMPORT: importSettings(); return 0;
+                case ID_EXPORT: exportSettings(); return 0;
                 default:
                     if (LOWORD(wp) >= ID_EDITSCRIPT_BASE && LOWORD(wp) < ID_EDITSCRIPT_BASE + 10) {
                         openScriptEditor(LOWORD(wp) - ID_EDITSCRIPT_BASE);
@@ -1941,16 +2238,18 @@ namespace {
                 if (scriptIdx >= 0) {
                     if (m_settingScript) return 0;                // programmatic update of the displayed text
                     m_full[scriptIdx] = rawEditText(LOWORD(wp));  // user typed in the box: it replaces the stored text
+                    if (m_ready) SetTimer(m_wnd, kPreviewSoon, 300, nullptr);
                 }
                 if (m_ready) {
                     const int id = LOWORD(wp);
+                    if (id >= ID_PREFIX2 && id <= ID_PREFIX5) refreshFieldList();
                     if (id == ID_FLAG_DIR || id == ID_ARTIST_FILE || id == ID_ARTIST2_FILE) updateStatus();
                     if (m_callback.is_valid()) m_callback->on_state_changed();
                 }
             }
             if (msg == WM_SIZE) layoutControls(LOWORD(lp), HIWORD(lp));
-            if (msg == WM_DPICHANGED) {
-                layoutControls(GetClientRectWidth(wnd), GetClientRectHeight(wnd));
+            if (msg == WM_DPICHANGED || msg == WM_DPICHANGED_AFTERPARENT) {
+                layoutControls(GetClientRectWidth(m_wnd), GetClientRectHeight(m_wnd));
             }
             if (msg == WM_THEMECHANGED || msg == WM_SYSCOLORCHANGE || msg == WM_SETTINGCHANGE) {
                 bool d = isDarkMode();
@@ -1958,8 +2257,19 @@ namespace {
                 InvalidateRect(m_wnd, nullptr, TRUE);
                 if (m_tab1Wnd) InvalidateRect(m_tab1Wnd, nullptr, TRUE);
                 if (m_tab2Wnd) InvalidateRect(m_tab2Wnd, nullptr, TRUE);
+                if (m_tab3Wnd) InvalidateRect(m_tab3Wnd, nullptr, TRUE);
+                applyFieldListColors();
             }
-            if (msg == WM_DESTROY) m_wnd = nullptr;
+            if (msg == WM_TIMER && (wp == kPreviewTimer || wp == kPreviewSoon)) {
+                if (wp == kPreviewSoon) KillTimer(m_wnd, kPreviewSoon);
+                updatePreview();
+                return 0;
+            }
+            if (msg == WM_DESTROY) {
+                KillTimer(m_wnd, kPreviewTimer);
+                KillTimer(m_wnd, kPreviewSoon);
+                m_wnd = nullptr;
+            }
             return DefWindowProcW(wnd, msg, wp, lp);
         }
 
@@ -1990,7 +2300,7 @@ namespace {
             HWND c = CreateWindowExW(0, L"STATIC", text, WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
                 0, 0, 10, 10, parent, id ? reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)) : nullptr,
                 core_api::get_my_instance(), nullptr);
-            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             return c;
         }
 
@@ -1999,7 +2309,7 @@ namespace {
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
                 0, 0, 10, 10, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
                 core_api::get_my_instance(), nullptr);
-            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             return c;
         }
 
@@ -2008,7 +2318,7 @@ namespace {
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 0, 0, 10, 10, parent, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
                 core_api::get_my_instance(), nullptr);
-            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             return c;
         }
 
@@ -2020,22 +2330,444 @@ namespace {
             return c;
         }
 
+        // ---- Fonts: same face and size as the preferences tree (the host dialog's font), scaled to the window's DPI ----
+        HFONT uiFont() const { return m_uiFont ? m_uiFont : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT)); }
+
+        LOGFONTW baseLogFont(UINT dpi) const {
+            LOGFONTW lf{};
+            // 1) the font of the preferences dialog that hosts this page
+            if (m_parent) {
+                const HFONT pf = reinterpret_cast<HFONT>(SendMessageW(m_parent, WM_GETFONT, 0, 0));
+                if (pf && GetObjectW(pf, sizeof(lf), &lf) == sizeof(lf)) return lf;
+            }
+            // 2) the system message font at this DPI
+            NONCLIENTMETRICSW ncm{};
+            ncm.cbSize = sizeof(ncm);
+            using SpiForDpiFn = BOOL(WINAPI*)(UINT, UINT, PVOID, UINT, UINT);
+            static const auto spiForDpi = []() -> SpiForDpiFn {
+                const HMODULE user32 = GetModuleHandleW(L"user32.dll");
+                return user32 ? reinterpret_cast<SpiForDpiFn>(GetProcAddress(user32, "SystemParametersInfoForDpi")) : nullptr;
+                }();
+            if (spiForDpi && spiForDpi(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0, dpi)) return ncm.lfMessageFont;
+            if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) return ncm.lfMessageFont;
+            GetObjectW(GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
+            return lf;
+        }
+
+        void buildFonts() {
+            const UINT dpi = dpiForWindow(m_wnd);
+            m_fontDpi = dpi;
+            LOGFONTW lf = baseLogFont(dpi);
+            m_uiFont = CreateFontIndirectW(&lf);
+            lf.lfWeight = FW_BOLD;
+            m_boldFont = CreateFontIndirectW(&lf);
+            m_statusFont = CreateFontW(-MulDiv(12, static_cast<int>(dpi), 72), 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
+                L"Segoe UI Symbol");
+        }
+
+        static BOOL CALLBACK setFontProc(HWND w, LPARAM lp) {
+            SendMessageW(w, WM_SETFONT, static_cast<WPARAM>(lp), TRUE);
+            return TRUE;
+        }
+
+        // The DPI of the window changed: make new fonts, give them to every control, free the old ones.
+        void rebuildFonts() {
+            HFONT oldUi = m_uiFont, oldBold = m_boldFont, oldStatus = m_statusFont;
+            m_uiFont = m_boldFont = m_statusFont = nullptr;
+            buildFonts();
+            EnumChildWindows(m_wnd, setFontProc, reinterpret_cast<LPARAM>(m_uiFont));
+            for (int i = 0; i < 5; ++i) if (m_rowLabel[i]) SendMessageW(m_rowLabel[i], WM_SETFONT, reinterpret_cast<WPARAM>(m_boldFont), TRUE);
+            for (HWND st : { m_statusFlag, m_statusArtist, m_statusArtist2 })
+                if (st) SendMessageW(st, WM_SETFONT, reinterpret_cast<WPARAM>(m_statusFont), TRUE);
+            if (oldUi) DeleteObject(oldUi);
+            if (oldBold) DeleteObject(oldBold);
+            if (oldStatus) DeleteObject(oldStatus);
+        }
+
+        // The list's header sends its custom-draw notifications to the list itself, not to the page,
+        // so the list is subclassed to give the header text a readable colour in dark mode.
+        static LRESULT CALLBACK FieldListSubclassProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp, UINT_PTR id, DWORD_PTR refData) {
+            auto* self = reinterpret_cast<country_flags_preferences_instance*>(refData);
+            if (msg == WM_NOTIFY && self && self->isDarkMode()) {
+                const NMHDR* nm = reinterpret_cast<const NMHDR*>(lp);
+                if (nm && nm->code == NM_CUSTOMDRAW && nm->hwndFrom == ListView_GetHeader(wnd)) {
+                    auto* cd = reinterpret_cast<NMCUSTOMDRAW*>(lp);
+                    if (cd->dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+                    if (cd->dwDrawStage == CDDS_ITEMPREPAINT) {
+                        SetTextColor(cd->hdc, RGB(240, 240, 240));
+                        return CDRF_NEWFONT;
+                    }
+                    return CDRF_DODEFAULT;
+                }
+            }
+            if (msg == WM_NCDESTROY) RemoveWindowSubclass(wnd, FieldListSubclassProc, id);
+            return DefSubclassProc(wnd, msg, wp, lp);
+        }
+
+        static BOOL CALLBACK destroyStrayListProc(HWND w, LPARAM lp) {
+            wchar_t cls[32] = {};
+            GetClassNameW(w, cls, 32);
+            if (wcscmp(cls, WC_LISTVIEWW) == 0) DestroyWindow(w);
+            (void)lp;
+            return TRUE;
+        }
+
+        // Creates (or re-creates) the field list. Safe to call again when the old window is gone.
+        void createFieldList() {
+            // No leftover list windows (they would show as an unsized white box in the corner).
+            if (m_tab3Wnd) EnumChildWindows(m_tab3Wnd, destroyStrayListProc, 0);
+            m_fieldList = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_SHOWSELALWAYS | LVS_NOSORTHEADER,
+                0, 0, 10, 10, m_tab3Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_FIELDLIST)),
+                core_api::get_my_instance(), nullptr);
+            if (!m_fieldList) {
+                const std::wstring msg = L"The field list could not be created (Windows error " + std::to_wstring(GetLastError()) + L").";
+                if (m_fieldNote) SetWindowTextW(m_fieldNote, msg.c_str());
+                return;
+            }
+            SetWindowSubclass(m_fieldList, FieldListSubclassProc, 2, reinterpret_cast<DWORD_PTR>(this));
+            SendMessageW(m_fieldList, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
+            ListView_SetExtendedListViewStyle(m_fieldList, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+            const wchar_t* titles[3] = { L"Source", L"Field", L"Description" };
+            for (int c = 0; c < 3; ++c) {
+                LVCOLUMNW col{};
+                col.mask = LVCF_TEXT | LVCF_WIDTH | LVCF_SUBITEM;
+                col.pszText = const_cast<LPWSTR>(titles[c]);
+                col.cx = 100;
+                col.iSubItem = c;
+                SendMessageW(m_fieldList, LVM_INSERTCOLUMNW, c, reinterpret_cast<LPARAM>(&col));
+            }
+            applyFieldListColors();
+        }
+
+        // The list can have been lost (destroyed by something else): make a new one and fill it.
+        void ensureFieldList() {
+            if (m_fieldList && IsWindow(m_fieldList)) return;
+            m_fieldList = nullptr;
+            createFieldList();
+            if (m_fieldList && m_fieldHint) SetWindowPos(m_fieldList, m_fieldHint, 0, 0, 10, 10, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+        }
+
+        // ---- "Fields" tab: every available field per source, one copyable row each ----
+        void createTab3Controls() {
+            m_fieldNote = addLabel(m_tab3Wnd,
+                L"Source 1 uses the fixed fields %countryflag_emoji%, %countryflag_path%, ...\n"
+                L"Sources 2-5 use %countryflag_<suffix>_emoji% etc.\n"
+                L"The fallback script runs only when the script returns no country; its result (an artist name)\n"
+                L"is looked up in the artist tables on the Folders tab.");
+            createFieldList();
+            m_fieldHint = addLabel(m_tab3Wnd,
+                L"Select one or more fields and press Ctrl+C, double-click a field, or use Copy. ");
+            m_copyBtn = CreateWindowExW(0, L"BUTTON", L"Copy", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, m_tab3Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_COPYFIELD)),
+                core_api::get_my_instance(), nullptr);
+            SendMessageW(m_copyBtn, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
+            EnableWindow(m_copyBtn, FALSE);
+        }
+
+        // Rebuilds the list from the suffixes currently on the Sources tab.
+        void refreshFieldList() {
+            ensureFieldList();
+            if (!m_fieldList) return;
+            static const int prefixIDs[] = { ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
+            SendMessageW(m_fieldList, WM_SETREDRAW, FALSE, 0);
+            ListView_DeleteAllItems(m_fieldList);
+            m_fieldTexts.clear();
+            int row = 0;
+            auto addRow = [&](const std::string& source, const std::string& field, const std::string& info) {
+                pfc::stringcvt::string_wide_from_utf8 wSource(source.c_str());
+                pfc::stringcvt::string_wide_from_utf8 wField(field.c_str());
+                pfc::stringcvt::string_wide_from_utf8 wInfo(info.c_str());
+                LVITEMW item{};
+                item.mask = LVIF_TEXT;
+                item.iItem = row;
+                item.iSubItem = 0;
+                item.pszText = const_cast<LPWSTR>(wSource.get_ptr());
+                const LRESULT at = SendMessageW(m_fieldList, LVM_INSERTITEMW, 0, reinterpret_cast<LPARAM>(&item));
+                if (at < 0) return;
+                LVITEMW sub{};
+                sub.iSubItem = 1;
+                sub.pszText = const_cast<LPWSTR>(wField.get_ptr());
+                SendMessageW(m_fieldList, LVM_SETITEMTEXTW, static_cast<WPARAM>(at), reinterpret_cast<LPARAM>(&sub));
+                sub.iSubItem = 2;
+                sub.pszText = const_cast<LPWSTR>(wInfo.get_ptr());
+                SendMessageW(m_fieldList, LVM_SETITEMTEXTW, static_cast<WPARAM>(at), reinterpret_cast<LPARAM>(&sub));
+                m_fieldTexts.push_back(wField.get_ptr());
+                ++row;
+                };
+            for (int i = 0; i < 5; ++i) {
+                std::string prefix = "countryflag_";
+                std::string label = "Source " + std::to_string(i + 1);
+                if (i > 0) {
+                    const std::string suffix = cleanSuffix(trim(readEdit(prefixIDs[i]).c_str()), i);
+                    prefix += suffix + "_";
+                    label += " (" + suffix + ")";
+                }
+                for (size_t k = 0; k < kFieldKindCount; ++k)
+                    addRow(label, "%" + prefix + kFieldKindNames[k] + "%", kFieldKindInfo[k]);
+            }
+            addRow("All sources", "%countryflag_lookup%", "ISO2 code(s) of the track's artist(s) found in the artist tables");
+            SendMessageW(m_fieldList, WM_SETREDRAW, TRUE, 0);
+            applyFieldListColors();
+            InvalidateRect(m_fieldList, nullptr, TRUE);
+            if (m_copyBtn) EnableWindow(m_copyBtn, FALSE);
+        }
+
+        // Explicit list colours so the rows are readable in both light and dark mode.
+        void applyFieldListColors() {
+            if (!m_fieldList) return;
+            const bool d = isDarkMode();
+            // The theme must follow the current mode too (the mode can change while the page is open):
+            // dark = dark list + header + scrollbars, light = the normal system look.
+            SetWindowTheme(m_fieldList, d ? L"DarkMode_Explorer" : L"Explorer", nullptr);
+            if (HWND hdr = ListView_GetHeader(m_fieldList)) SetWindowTheme(hdr, d ? L"DarkMode_ItemsView" : nullptr, nullptr);
+            const COLORREF bk = d ? RGB(32, 32, 32) : GetSysColor(COLOR_WINDOW);
+            const COLORREF fg = d ? RGB(240, 240, 240) : GetSysColor(COLOR_WINDOWTEXT);
+            SendMessageW(m_fieldList, LVM_SETBKCOLOR, 0, bk);
+            SendMessageW(m_fieldList, LVM_SETTEXTBKCOLOR, 0, bk);
+            SendMessageW(m_fieldList, LVM_SETTEXTCOLOR, 0, fg);
+            InvalidateRect(m_fieldList, nullptr, TRUE);
+        }
+
+        // Copies the field text of the selected rows (one per line) to the clipboard.
+        void copySelectedFields() {
+            std::wstring text;
+            int index = -1;
+            while ((index = ListView_GetNextItem(m_fieldList, index, LVNI_SELECTED)) >= 0) {
+                if (index >= (int)m_fieldTexts.size()) continue;
+                if (!text.empty()) text += L"\r\n";
+                text += m_fieldTexts[index];
+            }
+            if (text.empty() || !OpenClipboard(m_wnd)) return;
+            EmptyClipboard();
+            const size_t bytes = (text.size() + 1) * sizeof(wchar_t);
+            HGLOBAL mem = GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if (mem) {
+                if (void* dst = GlobalLock(mem)) {
+                    memcpy(dst, text.c_str(), bytes);
+                    GlobalUnlock(mem);
+                    if (!SetClipboardData(CF_UNICODETEXT, mem)) GlobalFree(mem);
+                }
+                else GlobalFree(mem);
+            }
+            CloseClipboard();
+        }
+
+        // Preview label + box: Sources tab only.
+        void createPreviewControls() {
+            HINSTANCE inst = core_api::get_my_instance();
+            HGDIOBJ gui = uiFont();
+            m_previewLabel = CreateWindowExW(0, L"STATIC", L"Preview:", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS,
+                0, 0, 10, 10, m_tab1Wnd, nullptr, inst, nullptr);
+            SendMessageW(m_previewLabel, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+            m_previewBox = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"",
+                WS_CHILD | WS_VISIBLE | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY,
+                0, 0, 10, 10, m_tab1Wnd, nullptr, inst, nullptr);
+            SendMessageW(m_previewBox, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+        }
+
+        // Import / Export buttons: Folders tab only.
+        void createImportExportControls() {
+            HINSTANCE inst = core_api::get_my_instance();
+            HGDIOBJ gui = uiFont();
+            m_ieLabel = addLabel(m_tab2Wnd, L"Settings file (all tabs):");
+            m_importBtn = CreateWindowExW(0, L"BUTTON", L"Import...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, m_tab2Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_IMPORT)), inst, nullptr);
+            SendMessageW(m_importBtn, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+            m_exportBtn = CreateWindowExW(0, L"BUTTON", L"Export...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
+                0, 0, 10, 10, m_tab2Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_EXPORT)), inst, nullptr);
+            SendMessageW(m_exportBtn, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
+        }
+
+        static void setText(HWND w, const std::string& text) {
+            pfc::stringcvt::string_wide_from_utf8 wide(text.c_str());
+            SetWindowTextW(w, wide.get_ptr());
+        }
+
+        static std::string withCrLf(const std::string& text) {
+            std::string out;
+            out.reserve(text.size() + 16);
+            for (size_t i = 0; i < text.size(); ++i) {
+                if (text[i] == '\n' && (i == 0 || text[i - 1] != '\r')) out += '\r';
+                out += text[i];
+            }
+            return out;
+        }
+
+        // Evaluates the scripts as they are on the page (applied or not) for the selected track.
+        void updatePreview() {
+            if (!m_previewBox || !m_ready) return;
+            static const int scriptIDs[] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5 };
+            static const int fallbackIDs[] = { ID_FALLBACK1, ID_FALLBACK2, ID_FALLBACK3, ID_FALLBACK4, ID_FALLBACK5 };
+            std::string label = "Preview:";
+            std::string body;
+            const metadb_handle_ptr track = pickPreviewTrack();
+            if (track.is_empty()) {
+                body = "Select a track in the playlist (or start playback) to see a preview.";
+            }
+            else {
+                label += " " + trackTitle(track.get_ptr());
+                for (int i = 0; i < 5; ++i) {
+                    if (i) body += "\n";
+                    body += previewSourceLine(track.get_ptr(), i + 1, readEdit(scriptIDs[i]), readEdit(fallbackIDs[i]));
+                }
+            }
+            if (label != m_lastPreviewLabel) { m_lastPreviewLabel = label; setText(m_previewLabel, label); }
+            if (body != m_lastPreview) { m_lastPreview = body; setText(m_previewBox, withCrLf(body)); }
+        }
+
+        // ---- import / export of all settings (UTF-8 text, key=value lines)
+        static std::string escapeValue(const std::string& text) {
+            std::string out;
+            for (char c : text) {
+                if (c == '\\') out += "\\\\";
+                else if (c == '\n') out += "\\n";
+                else if (c != '\r') out += c;
+            }
+            return out;
+        }
+
+        static std::string unescapeValue(const std::string& text) {
+            std::string out;
+            for (size_t i = 0; i < text.size(); ++i) {
+                if (text[i] == '\\' && i + 1 < text.size()) {
+                    ++i;
+                    out += text[i] == 'n' ? '\n' : text[i];
+                }
+                else out += text[i];
+            }
+            return out;
+        }
+
+        bool pickSettingsFile(bool save, std::wstring& path) {
+            std::wstring filter = L"Country Flags settings (*.cfsettings)";
+            filter += L'\0';
+            filter += L"*.cfsettings";
+            filter += L'\0';
+            filter += L"All files (*.*)";
+            filter += L'\0';
+            filter += L"*.*";
+            filter += L'\0';
+            filter += L'\0';
+            wchar_t buffer[MAX_PATH * 4] = {};
+            if (save) wcscpy_s(buffer, L"foo_countryflags_settings.cfsettings");
+            OPENFILENAMEW ofn{};
+            ofn.lStructSize = sizeof(ofn);
+            ofn.hwndOwner = GetAncestor(m_wnd, GA_ROOT);
+            ofn.lpstrFilter = filter.c_str();
+            ofn.lpstrFile = buffer;
+            ofn.nMaxFile = (DWORD)(sizeof(buffer) / sizeof(wchar_t));
+            ofn.lpstrTitle = save ? L"Export settings" : L"Import settings";
+            ofn.lpstrDefExt = L"cfsettings";
+            ofn.Flags = OFN_EXPLORER | OFN_PATHMUSTEXIST | OFN_NOCHANGEDIR | OFN_HIDEREADONLY
+                | (save ? OFN_OVERWRITEPROMPT : OFN_FILEMUSTEXIST);
+            const BOOL ok = save ? GetSaveFileNameW(&ofn) : GetOpenFileNameW(&ofn);
+            if (!ok) return false;
+            path = buffer;
+            return true;
+        }
+
+        // Exports what is on the page now, including changes that are not applied yet.
+        void exportSettings() {
+            std::wstring path;
+            if (!pickSettingsFile(true, path)) return;
+            static const int scriptIDs[] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5 };
+            static const int fallbackIDs[] = { ID_FALLBACK1, ID_FALLBACK2, ID_FALLBACK3, ID_FALLBACK4, ID_FALLBACK5 };
+            static const int prefixIDs[] = { ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
+            std::string data = "# Country Flags settings\n";
+            data += "format=foo_countryflags-settings-1\n";
+            for (int i = 0; i < 5; ++i) {
+                const std::string n = std::to_string(i + 1);
+                data += "source." + n + ".script=" + escapeValue(readEdit(scriptIDs[i])) + "\n";
+                data += "source." + n + ".fallback=" + escapeValue(readEdit(fallbackIDs[i])) + "\n";
+                if (i > 0) data += "source." + n + ".suffix=" + escapeValue(cleanSuffix(readEdit(prefixIDs[i]), i)) + "\n";
+            }
+            data += "flags.folder=" + escapeValue(readEdit(ID_FLAG_DIR)) + "\n";
+            data += "table.file=" + escapeValue(readEdit(ID_ARTIST_FILE)) + "\n";
+            data += "table.file2=" + escapeValue(readEdit(ID_ARTIST2_FILE)) + "\n";
+            data += std::string("table.order=") + (orderSelection() == 1 ? "flat" : "world") + "\n";
+            FILE* f = nullptr;
+            const bool ok = _wfopen_s(&f, path.c_str(), L"wb") == 0 && f
+                && fwrite(data.data(), 1, data.size(), f) == data.size();
+            if (f) fclose(f);
+            if (!ok) themed_message::show(GetAncestor(m_wnd, GA_ROOT), "Country Flags",
+                "The settings file could not be written.", false, IDI_WARNING);
+        }
+
+        // Loads the settings into the page; they take effect when Apply is pressed.
+        void importSettings() {
+            std::wstring path;
+            if (!pickSettingsFile(false, path)) return;
+            HWND owner = GetAncestor(m_wnd, GA_ROOT);
+            std::string data;
+            {
+                FILE* f = nullptr;
+                if (_wfopen_s(&f, path.c_str(), L"rb") != 0 || !f) {
+                    themed_message::show(owner, "Country Flags", "The settings file could not be read.", false, IDI_WARNING);
+                    return;
+                }
+                char buf[4096];
+                size_t n;
+                while ((n = fread(buf, 1, sizeof(buf), f)) > 0) data.append(buf, n);
+                fclose(f);
+            }
+            if (data.size() >= 3 && (unsigned char)data[0] == 0xEF && (unsigned char)data[1] == 0xBB && (unsigned char)data[2] == 0xBF)
+                data.erase(0, 3);
+
+            std::unordered_map<std::string, std::string> table;
+            size_t pos = 0;
+            while (pos < data.size()) {
+                size_t end = data.find('\n', pos);
+                if (end == std::string::npos) end = data.size();
+                std::string line = data.substr(pos, end - pos);
+                pos = end + 1;
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                if (line.empty() || line[0] == '#') continue;
+                const size_t eq = line.find('=');
+                if (eq == std::string::npos) continue;
+                table[line.substr(0, eq)] = unescapeValue(line.substr(eq + 1));
+            }
+            const auto format = table.find("format");
+            if (format == table.end() || format->second != "foo_countryflags-settings-1") {
+                themed_message::show(owner, "Country Flags", "This is not a Country Flags settings file.", false, IDI_WARNING);
+                return;
+            }
+            if (themed_message::show(owner, "Country Flags",
+                "Replace the settings on this page with the imported settings?\n\nThey are applied when you press Apply.",
+                true, IDI_QUESTION) != IDYES) return;
+
+            static const int scriptIDs[] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5 };
+            static const int fallbackIDs[] = { ID_FALLBACK1, ID_FALLBACK2, ID_FALLBACK3, ID_FALLBACK4, ID_FALLBACK5 };
+            static const int prefixIDs[] = { ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
+            auto get = [&](const std::string& key) -> const std::string* {
+                const auto it = table.find(key);
+                return it == table.end() ? nullptr : &it->second;
+                };
+            for (int i = 0; i < 5; ++i) {
+                const std::string n = std::to_string(i + 1);
+                if (const std::string* v = get("source." + n + ".script")) setEdit(scriptIDs[i], v->c_str());
+                if (const std::string* v = get("source." + n + ".fallback")) setEdit(fallbackIDs[i], v->c_str());
+                if (i > 0) if (const std::string* v = get("source." + n + ".suffix")) setEdit(prefixIDs[i], cleanSuffix(trim(v->c_str()), i).c_str());
+            }
+            if (const std::string* v = get("flags.folder")) setEdit(ID_FLAG_DIR, v->c_str());
+            if (const std::string* v = get("table.file")) setEdit(ID_ARTIST_FILE, v->c_str());
+            if (const std::string* v = get("table.file2")) setEdit(ID_ARTIST2_FILE, v->c_str());
+            if (const std::string* v = get("table.order")) setOrder(*v == "flat" ? 1 : 0);
+            updateStatus();
+            updatePreview();
+            if (m_callback.is_valid()) m_callback->on_state_changed();
+        }
+
         HWND addEditorButton(int id) const {
             HWND b = CreateWindowExW(0, L"BUTTON", L"...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
                 0, 0, 10, 10, m_tab1Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
                 core_api::get_my_instance(), nullptr);
-            SendMessageW(b, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            SendMessageW(b, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             return b;
         }
 
         void createTab1Controls() {
-            {
-                LOGFONTW lf{};
-                GetObjectW(GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
-                lf.lfWeight = FW_BOLD;
-                m_boldFont = CreateFontIndirectW(&lf);
-            }
-
             const wchar_t* sourceTitles[] = { L"Source 1", L"Source 2", L"Source 3", L"Source 4", L"Source 5" };
             const wchar_t* captions[3] = { L"Suffix:", L"Titleformat", L"Fallback" };
             const int scriptIDs[] = { ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5 };
@@ -2056,18 +2788,11 @@ namespace {
             EnableWindow(control(ID_PREFIX1), FALSE);
 
             m_note = addLabel(m_tab1Wnd,
-                L"Source 1 uses the fixed fields %countryflag_emoji%, %countryflag_path%, ...\n"
-                L"Sources 2-5 use %countryflag_<suffix>_emoji% etc.: enter only the suffix, not \"countryflag_\".\n"
-                L"Restart foobar2000 after changing a suffix. Use the ... buttons to edit long scripts on several lines.\n"
-                L"The fallback script runs only when the script returns no country; its result (an artist name)\n"
-                L"is looked up in the artist tables on the Folders tab.");
+                L"Changing a suffix asks to restart foobar2000 when you press Apply.");
+            createPreviewControls();
         }
 
         void createTab2Controls() {
-            m_statusFont = CreateFontW(-16, 0, 0, 0, FW_BOLD, FALSE, FALSE, FALSE, DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE,
-                L"Segoe UI Symbol");
-
             m_flagLabel = addLabel(m_tab2Wnd, L"Flag image folder (empty = component's flags folder)");
             m_statusFlag = addStatus(m_tab2Wnd, ID_STATUS_FLAG);
             addEdit(m_tab2Wnd, ID_FLAG_DIR);
@@ -2078,7 +2803,7 @@ namespace {
             addEdit(m_tab2Wnd, ID_ARTIST2_FILE);
             addButton(m_tab2Wnd, ID_ARTIST2_BROWSE);
 
-            m_artistLabel = addLabel(m_tab2Wnd, L"Artist table country_codes.json: {\"artist\": \"CC\"} (empty = next to the component)");
+            m_artistLabel = addLabel(m_tab2Wnd, L"Artist table country_codes.json: {\"artist\": \"CC\"} (empty = JSplitter package_data folder if the file is there, else next to the component)");
             m_statusArtist = addStatus(m_tab2Wnd, ID_STATUS_ARTIST);
             addEdit(m_tab2Wnd, ID_ARTIST_FILE);
             addButton(m_tab2Wnd, ID_ARTIST_BROWSE);
@@ -2092,33 +2817,74 @@ namespace {
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
                 0, 0, 10, 10, m_tab2Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ORDER_FLAT)),
                 core_api::get_my_instance(), nullptr);
-            SendMessageW(m_orderWorld, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
-            SendMessageW(m_orderFlat, WM_SETFONT, reinterpret_cast<WPARAM>(GetStockObject(DEFAULT_GUI_FONT)), TRUE);
+            SendMessageW(m_orderWorld, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
+            SendMessageW(m_orderFlat, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
+            createImportExportControls();
+        }
+
+        // Fields tab: note on top, list in the middle, hint and Copy button below.
+        // Sized from the tab page's own client rectangle, so it is right whenever the page is resized or shown.
+        void layoutFieldsTab() {
+            if (!m_tab3Wnd) return;
+            ensureFieldList();
+            if (!m_fieldList) return;
+            // The Fields page holds exactly four controls (note, list, hint, Copy); remove anything else
+            // (a leftover unsized window shows up as a small white box in the corner).
+            for (HWND c = GetWindow(m_tab3Wnd, GW_CHILD), next = nullptr; c; c = next) {
+                next = GetWindow(c, GW_HWNDNEXT);
+                if (c != m_fieldNote && c != m_fieldList && c != m_fieldHint && c != m_copyBtn) DestroyWindow(c);
+            }
+            RECT rc{};
+            GetClientRect(m_tab3Wnd, &rc);
+            const int tabW = rc.right - rc.left, tabH = rc.bottom - rc.top;
+            if (tabW <= 0 || tabH <= 0) return;
+            auto S = [&](int v) { return scale(v); };
+            const int margin = S(12), gap = S(8);
+            const int copyW = S(90), hintH = S(34), noteH3 = S(68);
+            if (m_fieldNote) SetWindowPos(m_fieldNote, nullptr, margin, margin, (std::max)(S(100), tabW - 2 * margin), noteH3, SWP_NOZORDER | SWP_NOACTIVATE);
+            const int listY = margin + noteH3 + gap;
+            const int listH = (std::max)(S(60), tabH - listY - margin - hintH - gap);
+            const int listW = (std::max)(S(100), tabW - 2 * margin);
+            SetWindowPos(m_fieldList, nullptr, margin, listY, listW, listH, SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+            const int sourceW = S(120), fieldW = S(260);
+            const int infoW = (std::max)(S(120), listW - sourceW - fieldW - S(24));
+            ListView_SetColumnWidth(m_fieldList, 0, sourceW);
+            ListView_SetColumnWidth(m_fieldList, 1, fieldW);
+            ListView_SetColumnWidth(m_fieldList, 2, infoW);
+            const int rowY = listY + listH + gap;
+            if (m_copyBtn) SetWindowPos(m_copyBtn, nullptr, tabW - margin - copyW, rowY + (hintH - S(26)) / 2, copyW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
+            if (m_fieldHint) SetWindowPos(m_fieldHint, nullptr, margin, rowY, (std::max)(S(100), tabW - 2 * margin - copyW - gap), hintH, SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         void layoutControls(int width, int height) {
-            if (!m_wnd || !m_tabWnd || !m_tab1Wnd) return;
+            if (!m_wnd || !m_tabWnd || !m_tab1Wnd || !m_previewBox) return;
+            if (m_fontDpi != dpiForWindow(m_wnd)) rebuildFonts();
             auto S = [&](int v) { return scale(v); };
             const int margin = S(12), gap = S(8), rowH = S(26), browseW = S(86), statusW = S(20);
 
-            SetWindowPos(m_tabWnd, nullptr, 0, 0, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+            const int tabAreaH = (std::max)(S(100), height);
 
-            RECT rcTab{ 0, 0, width, height };
+            SetWindowPos(m_tabWnd, nullptr, 0, 0, width, tabAreaH, SWP_NOZORDER | SWP_NOACTIVATE);
+
+            RECT rcTab{ 0, 0, width, tabAreaH };
             TabCtrl_AdjustRect(m_tabWnd, FALSE, &rcTab);
             const int tabW = (std::max)(S(100), static_cast<int>(rcTab.right - rcTab.left));
             const int tabH = (std::max)(S(100), static_cast<int>(rcTab.bottom - rcTab.top));
 
             if (m_tab1Wnd) SetWindowPos(m_tab1Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
             if (m_tab2Wnd) SetWindowPos(m_tab2Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
+            if (m_tab3Wnd) SetWindowPos(m_tab3Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
+
+            layoutFieldsTab();
 
             // --- Layout Tab 1 (Sources): no scrolling; everything is sized to fit the page ---
             // Per source:  [Source N]  Suffix: [edit]
             //              Titleformat [edit]
             //              Fallback    [edit]
-            const int nominalRowH = 24, nominalGap = 4, nominalGroupGap = 10, nominalNoteH = 84, nominalTop = 12;
-            const int nominalH = nominalTop + 5 * (3 * nominalRowH + 2 * nominalGap + nominalGroupGap) + nominalNoteH + nominalTop;
-            // Shrink vertical spacing (never below 75%) when the page is shorter than the nominal layout.
-            const int pct = (std::max)(75, (std::min)(100, MulDiv(tabH, 100, S(nominalH))));
+            const int nominalRowH = 22, nominalGap = 4, nominalGroupGap = 8, nominalNoteH = 20, nominalPreviewLabelH = 18, nominalPreviewH = 80, nominalTop = 8;
+            const int nominalH = nominalTop + 5 * (3 * nominalRowH + 2 * nominalGap + nominalGroupGap) + nominalNoteH + nominalGap + nominalPreviewLabelH + nominalGap + nominalPreviewH + nominalTop;
+            // Shrink vertical spacing (never below 70%) when the page is shorter than the nominal layout.
+            const int pct = (std::max)(70, (std::min)(100, MulDiv(tabH, 100, S(nominalH))));
             auto V = [&](int v) { return MulDiv(S(v), pct, 100); };
             const int rowH1 = V(nominalRowH), rowGap = V(nominalGap), groupGap = V(nominalGroupGap), noteH = V(nominalNoteH);
 
@@ -2158,6 +2924,10 @@ namespace {
                 y1 += rowH1 + groupGap;
             }
             place(m_note, margin, y1, fullW1, noteH);
+            y1 += noteH + rowGap;
+            place(m_previewLabel, margin, y1, fullW1, V(nominalPreviewLabelH));
+            y1 += V(nominalPreviewLabelH) + rowGap;
+            place(m_previewBox, margin, y1, fullW1, (std::max)(V(nominalPreviewH), tabH - y1 - V(nominalTop)));
 
             // --- Layout Tab 2 (Folders) ---
             const int fullW2 = (std::max)(S(100), tabW - 2 * margin);
@@ -2185,19 +2955,25 @@ namespace {
             if (m_orderLabel) SetWindowPos(m_orderLabel, nullptr, margin, y2, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE); y2 += S(22);
             if (m_orderWorld) SetWindowPos(m_orderWorld, nullptr, margin + S(8), y2, fullW2 - S(8), S(22), SWP_NOZORDER | SWP_NOACTIVATE); y2 += S(25);
             if (m_orderFlat) SetWindowPos(m_orderFlat, nullptr, margin + S(8), y2, fullW2 - S(8), S(22), SWP_NOZORDER | SWP_NOACTIVATE);
+            y2 += S(40);
+            const int ieW = S(90);
+            if (m_ieLabel) SetWindowPos(m_ieLabel, nullptr, margin, y2, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE);
+            y2 += S(22);
+            if (m_importBtn) SetWindowPos(m_importBtn, nullptr, margin, y2, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
+            if (m_exportBtn) SetWindowPos(m_exportBtn, nullptr, margin + ieW + gap, y2, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         void updateStatus() {
             if (!m_wnd) return;
-            struct Item { int edit; int status; bool folder; const char* defaultName; bool profileJsData; };
+            struct Item { int edit; int status; bool folder; const char* defaultName; int location; };
             static const Item items[3] = {
-                { ID_FLAG_DIR, ID_STATUS_FLAG, true, "flags", false },
-                { ID_ARTIST2_FILE, ID_STATUS_ARTIST2, false, "worldMap.json", true },
-                { ID_ARTIST_FILE, ID_STATUS_ARTIST, false, "country_codes.json", false },
+                { ID_FLAG_DIR, ID_STATUS_FLAG, true, "flags", kLocComponent },
+                { ID_ARTIST2_FILE, ID_STATUS_ARTIST2, false, "worldMap.json", kLocJsData },
+                { ID_ARTIST_FILE, ID_STATUS_ARTIST, false, "country_codes.json", kLocJSplitterPackage },
             };
             for (int i = 0; i < 3; ++i) {
                 const std::string text = trim(readEdit(items[i].edit).c_str());
-                const fs::path p = text.empty() ? defaultTablePath(items[i].defaultName, items[i].profileJsData) : expandPath(text);
+                const fs::path p = text.empty() ? defaultTablePath(items[i].defaultName, items[i].location) : expandPath(text);
                 std::error_code ec;
                 const bool ok = items[i].folder ? fs::is_directory(p, ec) : fs::is_regular_file(p, ec);
 
@@ -2342,6 +3118,7 @@ namespace {
             std::string text = readEdit(ids[slot]);
             if (!editScriptDialog(m_wnd, title.c_str(), text, slot < 5 ? 0 : 1)) return;
             setEdit(ids[slot], text.c_str());
+            updatePreview();
             if (m_ready && m_callback.is_valid()) m_callback->on_state_changed();
         }
 
@@ -2392,6 +3169,11 @@ namespace {
         HWND m_tabWnd;
         HWND m_tab1Wnd;
         HWND m_tab2Wnd;
+        HWND m_tab3Wnd;                     // "Fields" tab: copyable list of all fields
+        HWND m_fieldList, m_fieldHint, m_copyBtn;
+        HWND m_fieldNote = nullptr;               // note above the list on the Fields tab
+        HWND m_ieLabel = nullptr;                 // caption of the Import / Export buttons (Folders tab)
+        std::vector<std::wstring> m_fieldTexts;   // field text of every list row
         bool m_ready;
         int m_originalOrder;
         HWND m_note;
@@ -2400,16 +3182,23 @@ namespace {
         HWND m_editBtn[10];                 // "..." buttons: slot 0-4 titleformat, 5-9 fallback
         mutable std::string m_full[10];     // full (multi-line) text of the ten scripts
         mutable bool m_settingScript;
+        HWND m_previewLabel, m_previewBox;   // Sources tab
+        HWND m_importBtn, m_exportBtn;       // Folders tab
+        std::string m_lastPreview, m_lastPreviewLabel;
         HWND m_flagLabel, m_artistLabel, m_artist2Label;
         HWND m_orderLabel, m_orderWorld, m_orderFlat;
         HWND m_statusFlag, m_statusArtist, m_statusArtist2;
         HWND m_rowLabel[5];
         HFONT m_statusFont;
+        HFONT m_uiFont = nullptr;             // font of the host preferences dialog, DPI-matched
+        UINT m_fontDpi = 0;
+        HWND m_parent = nullptr;
         HBRUSH m_brDark;
         COLORREF m_statusColor[3];
         fb2k::CCoreDarkModeHooks m_darkMode;
         fb2k::CCoreDarkModeHooks m_tab1DarkMode;
         fb2k::CCoreDarkModeHooks m_tab2DarkMode;
+        fb2k::CCoreDarkModeHooks m_tab3DarkMode;
         preferences_page_callback::ptr m_callback;
         std::unordered_map<int, std::string> m_original;
     };
@@ -2428,6 +3217,7 @@ namespace {
     class flag_fields : public metadb_display_field_provider {
     public:
         static constexpr t_uint32 kKinds = 9;
+        static_assert(kKinds == kFieldKindCount, "field kinds out of sync with the Fields tab");
         static constexpr t_uint32 kLookupIndex = 5 * kKinds;
 
         t_uint32 get_field_count() override { return kLookupIndex + 1; }
@@ -2435,7 +3225,7 @@ namespace {
         void get_field_name(t_uint32 index, pfc::string_base& out) override {
             if (index == kLookupIndex) { out.set_string("countryflag_lookup"); return; }
             if (index > kLookupIndex) { out.reset(); return; }
-            static const char* suffixes[kKinds] = { "emoji", "path", "name", "iso2", "iso3", "region", "subregion", "argument", "fallbackargument" };
+            const char* const* suffixes = kFieldKindNames;
             const std::string prefix = fieldPrefix(index / kKinds);
             if (prefix.empty()) { out.set_string(""); return; }
             const std::string name = prefix + suffixes[index % kKinds];

@@ -35,17 +35,26 @@ If a part is not a recognised country, it is skipped. If *no* part is recognised
 
 ### Source suffixes
 
-Open **Preferences > Tools > Country Flags** to configure the component. The page has two tabs:
+Open **Preferences > Tools > Country Flags** to configure the component. The page has three tabs:
 
-- **Sources**: one block per source, five blocks stacked on the page (no scrolling). Each block has three rows: the source name (**Source 1** to **Source 5**) with its **Suffix** box, then the **Titleformat** string, then the optional **Fallback** string (see [fallback scripts](#fallback-scripts)). The **...** button next to each script opens a larger, resizable editor for [long scripts](#long-scripts). A short help text below the last source repeats the rules below.
-- **Folders**: the flag image folder and the two artist tables, each with a Browse button and a found / not found marker (see [Paths](#paths-and-markers)), plus the choice of which artist table wins.
+- **Sources**: one block per source, five blocks stacked on the page (no scrolling). Each block has three rows: the source name (**Source 1** to **Source 5**) with its **Suffix** box, then the **Titleformat** string, then the optional **Fallback** string (see [fallback scripts](#fallback-scripts)). The **...** button next to each script opens a larger, resizable editor for [long scripts](#long-scripts). A one-line note below the last source reminds you that changing a suffix asks to restart foobar2000 when you press Apply. Below it, the **Preview** box shows, for the selected playlist item (or the playing track when nothing is selected), what each source's script returns and which countries that gives. It evaluates the scripts as they are on the page, applied or not, and follows the selection automatically.
+- **Folders**: the flag image folder and the two artist tables, each with a Browse button and a found / not found marker (see [Paths](#paths-and-markers)), plus the choice of which artist table wins. The **Import...** and **Export...** buttons at the bottom of this tab are described in [Import and export](#import-and-export-of-settings).
+- **Fields**: a list of every title-formatting field the component provides, for each source (one row per field, with its source and a short description). The notes above the list explain the naming: Source 1 uses the fixed fields `%countryflag_emoji%`, `%countryflag_path%`, ..., Sources 2-5 use `%countryflag_<suffix>_emoji%` etc. (enter only the suffix, not `countryflag_`), and the fallback script runs only when the script returns no country, its result (an artist name) being looked up in the artist tables on the Folders tab. The list follows the suffixes currently typed on the Sources tab, so the names are right as soon as you change a suffix (a changed suffix is valid in foobar2000 after Apply and a restart). It also contains `%countryflag_lookup%` and the two debug fields (`argument`, `fallbackargument`) of each source.
+  - **Copying fields:** select one or more rows and press **Ctrl+C** (**Ctrl+A** selects all), double-click a row, or press the **Copy** button. The field text (for example `%countryflag_artist_iso2%`) of every selected row is put on the clipboard, one per line, ready to paste into a title-formatting string
 
 - **Source 1** keeps the original, unsuffixed field names (`%countryflag_emoji%`, `%countryflag_path%`, etc.). Its field names are fixed.
 - **Sources 2–5** use the required `countryflag_` prefix plus the suffix entered by the user. Enter only the suffix value; do not type `countryflag_`.
 - Example: entering `artist` produces `%countryflag_artist_emoji%`, `%countryflag_artist_path%`, `%countryflag_artist_name%`, `%countryflag_artist_iso2%`, and `%countryflag_artist_iso3%`.
 - Default suffixes are `artist`, `3`, `4`, and `5` for Sources 2–5. Only letters, digits and `_` are kept (any other character is removed), leading and trailing `_` are trimmed, and an empty suffix falls back to the default.
-- **Restart foobar2000 after changing suffixes.** The available title-formatting field names are enumerated by foobar2000 and do not update immediately when the suffix setting changes.
+- **Restart foobar2000 after changing suffixes.** The available title-formatting field names are enumerated by foobar2000 and do not update immediately when the suffix setting changes. Pressing Apply after a suffix change asks whether to restart; the **Fields** tab already shows the new names before that.
 - Source scripts are title-formatting expressions that return a country code or country name, for example `%artistcountry%`. The defaults only apply to fresh settings.
+
+### Import and export of settings
+
+The **Import...** and **Export...** buttons on the **Folders** tab save and load all settings of the page (the ten scripts, the four suffixes, the three paths and the artist table order) as a text file with the extension `.cfsettings` (UTF-8, one `key=value` line per setting, line breaks inside scripts stored as `\n`).
+
+- **Export** writes what is on the page now, including changes that have not been applied yet.
+- **Import** asks for confirmation, then loads the file into the page. Nothing takes effect until you press **Apply**, so you can still look at the result (and in the **Fields** tab and the preview) or press **Cancel**. Keys that are missing from the file leave the current value unchanged; a file that is not a Country Flags settings file is rejected.
 
 ## How a country value is interpreted
 
@@ -57,7 +66,7 @@ Every source has an optional **fallback script**. It runs only when the source s
 
 Example for a group header: Source 1 = `$if3(%albumartistcountry%,%artistcountry%,%country%)`, fallback = your own album-artist expression. If the tags give no country, the country of that album artist is taken from the tables.
 
-- The fallback may be any title-formatting expression, including long ones with `$puts`/`$get` and `$meta()`. It is evaluated for the track the field is requested for. For the playing track, `%isplaying%` is `1`, and for a playing stream `%artist%`, `%title%` and `$meta(artist,0)`, `$meta(title,0)` (and other fields present in the stream's dynamic metadata) return the live stream values, so expressions written for a now-playing display behave the same here. Expressions that rely on other title-formatting functions or fields set elsewhere (for example a custom `%stationswap%`) see exactly what the track entry provides.
+- The fallback may be any title-formatting expression, including long ones with `$puts`/`$get` and `$meta()`. It is evaluated for the track the field is requested for. Scripts are evaluated by foobar2000 for the track entry exactly as it is, so for an internet radio stream `%artist%` and `%title%` show the tags of the playlist entry, not the live stream metadata; use `%countryflag_lookup%` for the live stream artist. Expressions that rely on other title-formatting functions or fields set elsewhere (for example a custom `%stationswap%`) see exactly what the track entry provides.
 - Results are cached per track and source for up to 10 seconds, and the cache is dropped earlier when the track's info, the settings, an artist table or the stream metadata change, so a row that shows several fields evaluates the scripts once.
 - Do not use this component's own `%countryflag_*%` per-source fields inside a script (they are ignored to prevent endless recursion).
 - Default: only Source 2 has a fallback, `$if3(%artist%,%album artist%)`. The field `%countryflag_lookup%` (ISO2 code(s) of the track's artist tags and the stream artist, looked up in the artist tables) remains available for use in any script, for example `$if2(%artistcountry%,%countryflag_lookup%)`.
@@ -66,12 +75,12 @@ Example for a group header: Source 1 = `$if3(%albumartistcountry%,%artistcountry
 
 Click the **...** button next to a Titleformat or Fallback box to edit it in a resizable multi-line editor (Ctrl+A selects all; **OK** keeps the change, **Cancel** discards it).
 
-The editor has a **Test on selected track** button. It evaluates the script as it is in the editor (it does not have to be saved or applied) for the selected playlist item, or for the playing track when nothing is selected, and shows in the result box:
+																																												 
 
-- the track used, the raw result of the script, and
-- for a Titleformat script, the countries it resolves to (or that none were recognised, so the fallback would run); for a Fallback script, the countries found for the returned artist name in the artist tables (or that the artist was not found).
+																																																															
 
-For a playing stream the test sees the same dynamic (ICY) artist and title as the fields do. Long scripts can be written readably, with one part per line, indentation and `//` comment lines:
+												   
+Long scripts can be written readably, with one part per line, indentation and `//` comment lines:
 
 ```
 // country of the album artist
@@ -252,9 +261,10 @@ var img = path ? gdi.Image(path) : null;
 
 ## Data files
 
+- `*.cfsettings`: settings files written by **Export...** on the Folders tab (see [Import and export](#import-and-export-of-settings)); you choose where they are saved.
 - `regions.txt`: optional, overrides/extends the built-in [cultural regions](#cultural-regions); not included in the zip.
 - `countries.txt` (optional): the country list is **built into the component** (ISO 3166-1, plus Kosovo using the user-assigned code `XKX`). If this file exists next to the DLL it is read at startup as an override: one country per line in the format `ISO2|ISO3|Name`. A line for an ISO2 code that is already built in replaces its name and ISO3 code (the old name and ISO3 code keep working as aliases); a line with a new code adds a country. Restart foobar2000 after editing it. Back it up before updating the component, as component updates may replace the file. An unchanged copy of the full list has no effect, so you can delete it and keep only your own lines.
-- `country_codes.json`: optional artist table (see [Artist tables](#artist-tables));
+- `country_codes.json`: optional artist table (default location: `profile\foo_uie_jsplitter\package_data\{BA9557CE-7B4B-4E0E-9373-99F511E81252}\country_codes.json`, otherwise next to the DLL)(see [Artist tables](#artist-tables));
 - `worldMap.json`: optional artist table (default location: `profile\js_data\worldMap.json`, otherwise next to the DLL) (see [Artist tables](#artist-tables)); by default it takes precedence over `country_codes.json`; 
 - `flags\*.png`: not bundled. [flag-icons](https://github.com/lipis/flag-icons) (MIT) is one source; export its SVGs to PNG and keep its license file.
 
