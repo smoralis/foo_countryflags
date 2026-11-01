@@ -71,7 +71,7 @@
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "Comdlg32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.6",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.7",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
