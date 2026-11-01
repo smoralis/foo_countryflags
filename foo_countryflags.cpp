@@ -1027,6 +1027,8 @@ namespace {
         std::mutex m;
         metadb_handle_ptr track;
         std::vector<std::string> artists;
+        file_info_impl dynamicInfo;     // meta fields of the latest dynamic (stream) info of the playing track
+        bool hasDynamicInfo = false;
     };
 
     DynamicArtists& dynamicArtists() {
@@ -1045,6 +1047,8 @@ namespace {
                 std::lock_guard<std::mutex> lock(d.m);
                 d.track = p_track;
                 d.artists.clear();
+                d.dynamicInfo.reset();
+                d.hasDynamicInfo = false;
             }
             ++g_generation;
         }
@@ -1054,6 +1058,8 @@ namespace {
                 std::lock_guard<std::mutex> lock(d.m);
                 d.track.release();
                 d.artists.clear();
+                d.dynamicInfo.reset();
+                d.hasDynamicInfo = false;
             }
             ++g_generation;
         }
@@ -1071,6 +1077,8 @@ namespace {
             {
                 std::lock_guard<std::mutex> lock(d.m);
                 d.artists = std::move(artists);
+                d.dynamicInfo.copy(p_info);
+                d.hasDynamicInfo = p_info.meta_get_count() > 0;
             }
             ++g_generation;
         }
@@ -1255,14 +1263,41 @@ namespace {
             std::lock_guard<std::mutex> lock(d.m);
             d.track.release();
             d.artists.clear();
+            d.dynamicInfo.reset();
+            d.hasDynamicInfo = false;
         }
     };
     initquit_factory_t<quit_cleanup> g_quit_cleanup;
 
+    // For the playing track with live stream metadata: the track's own info with the dynamic meta
+    // fields (artist, title, ...) replaced by the stream's current values. Returns false for every
+    // other track (local files, streams before the first update).
+    bool mergedStreamInfo(metadb_handle* h, file_info_impl& merged) {
+        file_info_impl dynamicCopy;
+        {
+            DynamicArtists& d = dynamicArtists();
+            std::lock_guard<std::mutex> lock(d.m);
+            if (!d.hasDynamicInfo || !d.track.is_valid() || d.track.get_ptr() != h) return false;
+            dynamicCopy.copy(d.dynamicInfo);
+        }
+        if (!h->get_info(merged)) return false;
+        const t_size total = dynamicCopy.meta_get_count();
+        for (t_size i = 0; i < total; ++i) {
+            const t_size values = dynamicCopy.meta_enum_value_count(i);
+            if (values == 0) continue;
+            const char* name = dynamicCopy.meta_enum_name(i);
+            merged.meta_remove_field(name);
+            for (t_size k = 0; k < values; ++k) merged.meta_add(name, dynamicCopy.meta_enum_value(i, k));
+        }
+        return true;
+    }
+
     std::string evalCompiled(metadb_handle* h, const titleformat_object::ptr& script) {
         if (script.is_empty()) return {};
         pfc::string8 result;
-        h->format_title(nullptr, result, script, nullptr);
+        file_info_impl merged;
+        if (mergedStreamInfo(h, merged)) h->format_title_from_external_info(merged, nullptr, result, script, nullptr);
+        else h->format_title(nullptr, result, script, nullptr);
         return trim(result.c_str());
     }
 
