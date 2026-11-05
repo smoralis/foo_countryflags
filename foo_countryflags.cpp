@@ -1,40 +1,5 @@
 ﻿// foo_countryflags - exposes country flag fields to title formatting.
 //
-// Five independently configurable country sources. Each source has a configurable suffix; field names are countryflag_<suffix>_emoji, countryflag_<suffix>_path, etc. The required countryflag_ prefix is always present.
-// Source 1 fields: %countryflag_emoji%, %countryflag_path%, %countryflag_name%,
-//                  %countryflag_iso2%, %countryflag_iso3%
-// Source 2 fields: %countryflag_artist_emoji%, %countryflag_artist_path%,
-//                  %countryflag_artist_name%, %countryflag_artist_iso2%, %countryflag_artist_iso3%
-// Source 3 fields default suffix: 3 (e.g. %countryflag_3_emoji%).
-// Source 4 fields default suffix: 4 (e.g. %countryflag_4_emoji%).
-// Source 5 fields default suffix: 5 (e.g. %countryflag_5_emoji%).
-// Defaults: source 1 = %country%, source 2 = %artistcountry% (fallback: artist name); sources 3-5 empty.
-// Each source has an optional FALLBACK script: when the main script returns no recognised
-// country, the fallback is evaluated and its result (an artist name) is looked up in the
-// artist tables (worldMap.json first, then country_codes.json).
-// Paths in preferences may use %fb2k_profile_path%, %fb2k_component_path%, %fb2k_path% and
-// Windows %VARIABLES%; relative paths are tried against the foobar2000 folder, then the profile.
-// Fields per source: emoji, path, name, iso2, iso3, region, subregion (cultural regions, e.g.
-// SLE -> Africa / West Africa; built-in table, extendable with regions.txt).
-// Extra field: %countryflag_lookup% = ISO2 code(s) of the track's artist(s) found in the artist tables
-//   (country_codes.json: flat JSON {"artist name": "CC"}, case-insensitive, reloaded when changed).
-//   For the playing stream, the dynamic (ICY) artist is searched first.
-//   The file locations can be set in preferences. Empty box = default: country_codes.json is
-//   profile\foo_uie_jsplitter\package_data\{BA9557CE-7B4B-4E0E-9373-99F511E81252}\country_codes.json
-//   if that file exists, else next to the DLL; worldMap.json is profile\js_data\worldMap.json,
-//   else next to the DLL.
-//   worldMap.json ([{"artist": "...", "val": [..., "Country"]}]; the last item of val is the
-//   country) and country_codes.json are both searched; which one takes precedence when an
-//   artist is in both is a setting (default: worldMap.json first).
-// Preferences > Tools > Country Flags.
-// The script must not use the per-source %countryflag_*% fields (re-entrant calls are
-// ignored to prevent infinite recursion). %countryflag_lookup% is safe to use in scripts.
-//
-// Countries: a built-in ISO 3166-1 table. An optional countries.txt next to the DLL (lines of
-// ISO2|ISO3|Name) overrides entries with the same ISO2 and can add more.
-// Built in (no data-file entry needed): XE/EU = Europe, XW = Worldwide.
-//   XE is folded into EU; XW emits a globe emoji and looks for flags\xw.png.
-// Flag images: flags\gr.png, flags\us.png, ... next to the DLL (or custom folder).
 //
 // Build: VS2022, x64, C++17, link foobar2000_SDK, foobar2000_component_client, pfc.
 // NOTE: keep this file pure ASCII (use \u / \x escapes). MSVC reads BOM-less
@@ -71,7 +36,7 @@
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "Comdlg32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.7",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.8",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
@@ -86,6 +51,10 @@ namespace {
     const GUID guid_source4_script = { 0x7f6a1024, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x04 } };
     const GUID guid_source5_script = { 0x7f6a1025, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x05 } };
     const GUID guid_artist_file = { 0x3c1d8e47, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xc3 } };
+    const GUID guid_countries_file = { 0x3c1d8e50, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xd0 } };
+    const GUID guid_regions_file = { 0x3c1d8e51, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xd1 } };
+    const GUID guid_artist_file3 = { 0x3c1d8e52, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xd2 } };
+    const GUID guid_aliases_file = { 0x3c1d8e53, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xd3 } };
     const GUID guid_artist_file2 = { 0x3c1d8e48, 0x6a52, 0x4b90, { 0xa7, 0x0e, 0x58, 0xd4, 0x92, 0x1f, 0x6b, 0xc4 } };
     const GUID guid_fallback1 = { 0x7f6a1041, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x21 } };
     const GUID guid_fallback2 = { 0x7f6a1042, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x22 } };
@@ -93,6 +62,7 @@ namespace {
     const GUID guid_fallback4 = { 0x7f6a1044, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x24 } };
     const GUID guid_fallback5 = { 0x7f6a1045, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x25 } };
     const GUID guid_table_order = { 0x5b2e9a61, 0x0c73, 0x4e18, { 0x8d, 0x4a, 0x92, 0x1e, 0x6f, 0x30, 0xb7, 0xd5 } };
+    const GUID guid_artist_country_field = { 0x5b2e9a62, 0x0c73, 0x4e18, { 0x8d, 0x4a, 0x92, 0x1e, 0x6f, 0x30, 0xb7, 0xd6 } };
     const GUID guid_dir = { 0xb46e52be, 0x3476, 0x45b5, { 0x98, 0x4f, 0xff, 0x11, 0xbd, 0x1f, 0x98, 0x8b } };
     const GUID guid_prefix1 = { 0x7f6a1031, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x11 } };
     const GUID guid_prefix2 = { 0x7f6a1032, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x12 } };
@@ -116,8 +86,13 @@ namespace {
     cfg_string g_cfgFallback5(guid_fallback5, "");
     cfg_string g_cfgDir(guid_dir, "");
     cfg_int g_cfgTableOrder(guid_table_order, 0);
+    cfg_int g_cfgArtistAreaMode(guid_artist_country_field, 0); // 0 = country, 1 = area.iso-3166-1-codes
     cfg_string g_cfgArtistFile(guid_artist_file, "");
     cfg_string g_cfgArtistFile2(guid_artist_file2, "");
+    cfg_string g_cfgArtistFile3(guid_artist_file3, "");
+    cfg_string g_cfgAliasesFile(guid_aliases_file, "");   // user country aliases (aliases.txt)   // MusicBrainz DB repository: artists_country.json
+    cfg_string g_cfgCountriesFile(guid_countries_file, "");
+    cfg_string g_cfgRegionsFile(guid_regions_file, "");
     cfg_string g_cfgPrefix1(guid_prefix1, "main");
     cfg_string g_cfgPrefix2(guid_prefix2, "artist");
     cfg_string g_cfgPrefix3(guid_prefix3, "3");
@@ -128,6 +103,17 @@ namespace {
 
     std::string trim(const char* s);
     fs::path expandPath(const std::string& utf8);
+
+    // Where a data file or folder is looked for when its path box is empty.
+    enum DefaultLocation {
+        kLocJsData = 1,             // profile\js_data\<file> if it exists, else the data folder
+        kLocJSplitterPackage = 2,   // profile\foo_uie_jsplitter\package_data\{GUID}\<file> if it exists, else the data folder
+        kLocProfileData = 3,        // the data folder, profile\foo_countryflags_data\<name>
+        kLocMusicBrainz = 4         // profile\foo_musicbrainz_db\repository\artists\<file> if it exists, else the data folder
+    };
+    fs::path defaultTablePath(const char* fileName, int location);
+    // countries.txt, regions.txt and the flags folder: the configured path, or the default location.
+    fs::path dataPath(const char* name, const std::string& custom);
 
     cfg_string* prefixConfig(size_t index) {
         static cfg_string* configs[] = { &g_cfgPrefix1, &g_cfgPrefix2, &g_cfgPrefix3, &g_cfgPrefix4, &g_cfgPrefix5 };
@@ -166,11 +152,6 @@ namespace {
     }
     std::string upper(std::string s) { for (auto& c : s) c = (char)toupper((unsigned char)c); return s; }
     std::string lower(std::string s) { for (auto& c : s) c = (char)tolower((unsigned char)c); return s; }
-
-    fs::path componentDir() {
-        static const fs::path p = fs::u8path(core_api::get_my_full_path()).parent_path();
-        return p;
-    }
 
     std::string toUtf8(const fs::path& p) {
         pfc::stringcvt::string_utf8_from_wide u(p.wstring().c_str());
@@ -214,7 +195,7 @@ namespace {
         { "Europe", "", "EUR" },
     };
 
-    // Built-in ISO 3166-1 table (ISO2, ISO3, English name). An optional countries.txt next to the DLL
+    // Built-in ISO 3166-1 table (ISO2, ISO3, English name). An optional countries.txt
     // (lines ISO2|ISO3|Name) overrides entries with the same ISO2 and can add more.
     struct CountryRow { const char* a2; const char* a3; const char* name; };
 
@@ -493,8 +474,8 @@ namespace {
                 };
             for (const CountryRow& r : kBuiltinCountries) put(r.a2, r.a3, r.name);
 
-            // Optional override / extension file next to the DLL.
-            std::ifstream f(componentDir() / "countries.txt");
+            // Optional override / extension file (data folder or configured path).
+            std::ifstream f(dataPath("countries.txt", trim(g_cfgCountriesFile.get())));
             std::string line;
             while (std::getline(f, line)) {
                 if (line.size() >= 3 && (unsigned char)line[0] == 0xEF) line.erase(0, 3);
@@ -534,6 +515,32 @@ namespace {
             };
             for (auto& a : aliases) d.name2to2[a[0]] = a[1];
 
+            // User aliases: aliases.txt, lines "alias|target" where the target is an ISO2 code, an ISO3 code or a
+            // country name; empty lines and lines starting with # are ignored. They override the built-in aliases.
+            {
+                std::ifstream af(dataPath("aliases.txt", trim(g_cfgAliasesFile.get())));
+                std::string al;
+                while (std::getline(af, al)) {
+                    if (al.size() >= 3 && (unsigned char)al[0] == 0xEF) al.erase(0, 3);
+                    if (!al.empty() && al.back() == '\r') al.pop_back();
+                    if (al.empty() || al[0] == '#') continue;
+                    const auto bar = al.find('|');
+                    if (bar == std::string::npos) continue;
+                    const std::string alias = lower(trim(al.substr(0, bar).c_str()));
+                    const std::string target = trim(al.substr(bar + 1).c_str());
+                    if (alias.empty() || target.empty()) continue;
+                    std::string iso;
+                    const std::string up = upper(target);
+                    const auto byTwo = d.a2name.find(up);
+                    const auto byThree = d.a3to2.find(up);
+                    const auto byName = d.name2to2.find(lower(target));
+                    if (byTwo != d.a2name.end()) iso = up;
+                    else if (byThree != d.a3to2.end()) iso = byThree->second;
+                    else if (byName != d.name2to2.end()) iso = byName->second;
+                    if (!iso.empty()) d.name2to2[alias] = iso;
+                }
+            }
+
             auto addRegions = [&](const RegionRow* rows, size_t count) {
                 for (size_t i = 0; i < count; ++i) {
                     std::istringstream codes(rows[i].iso3);
@@ -551,7 +558,7 @@ namespace {
             addRegions(kRegionExtras, sizeof(kRegionExtras) / sizeof(kRegionExtras[0]));
 
             std::unordered_set<std::string> replaced;
-            std::ifstream rf(componentDir() / "regions.txt");
+            std::ifstream rf(dataPath("regions.txt", trim(g_cfgRegionsFile.get())));
             std::string rl;
             while (std::getline(rf, rl)) {
                 if (rl.size() >= 3 && (unsigned char)rl[0] == 0xEF) rl.erase(0, 3);
@@ -633,7 +640,7 @@ namespace {
         if (it != cache.end() && now - it->second.checked < ttl)
             return it->second.path;
 
-        fs::path dir = customDir.empty() ? componentDir() / "flags" : expandPath(customDir);
+        fs::path dir = dataPath("flags", customDir);
 
         std::vector<std::string> stems{ lower(iso2) };
         if (iso2 == "EU") stems.push_back("xe");
@@ -708,7 +715,6 @@ namespace {
         std::wstring w = widenUtf8(trim(utf8.c_str()));
         if (w.empty()) return {};
         replaceTokenCI(w, L"%fb2k_profile_path%", profileDirWide());
-        replaceTokenCI(w, L"%fb2k_component_path%", componentDir().wstring());
         replaceTokenCI(w, L"%fb2k_path%", exeDirWide());
         if (w.find(L'%') != std::wstring::npos) {
             const DWORD need = ExpandEnvironmentStringsW(w.c_str(), nullptr, 0);
@@ -733,29 +739,28 @@ namespace {
         return p;
     }
 
-    // Where an artist table is looked for when its path box is empty.
-    enum DefaultLocation {
-        kLocComponent = 0,          // next to the DLL only
-        kLocJsData = 1,             // profile\js_data\<file>, else next to the DLL
-        kLocJSplitterPackage = 2    // profile\foo_uie_jsplitter\package_data\{GUID}\<file> if it exists, else next to the DLL
-    };
-
     fs::path defaultTablePath(const char* fileName, int location) {
-        const fs::path inComponent = componentDir() / fileName;
-        if (location == kLocComponent) return inComponent;
         const std::wstring& prof = profileDirWide();
-        if (prof.empty()) return inComponent;
+        if (prof.empty()) return {};
         std::error_code ec;
         if (location == kLocJSplitterPackage) {
             const fs::path inPackage = fs::path(prof) / L"foo_uie_jsplitter" / L"package_data" /
                 L"{BA9557CE-7B4B-4E0E-9373-99F511E81252}" / fileName;
             if (fs::exists(inPackage, ec)) return inPackage;
-            return inComponent;
         }
-        const fs::path inProfile = fs::path(prof) / L"js_data" / fileName;
-        if (fs::exists(inProfile, ec)) return inProfile;
-        if (fs::exists(inComponent, ec)) return inComponent;
-        return inProfile;
+        else if (location == kLocMusicBrainz) {
+            const fs::path inRepository = fs::path(prof) / L"foo_musicbrainz_db" / L"repository" / L"artists" / fileName;
+            if (fs::exists(inRepository, ec)) return inRepository;
+        }
+        else if (location == kLocJsData) {
+            const fs::path inJsData = fs::path(prof) / L"js_data" / fileName;
+            if (fs::exists(inJsData, ec)) return inJsData;
+        }
+        return fs::path(prof) / L"foo_countryflags_data" / fileName;
+    }
+
+    fs::path dataPath(const char* name, const std::string& custom) {
+        return custom.empty() ? defaultTablePath(name, kLocProfileData) : expandPath(custom);
     }
 
     std::wstring portablePath(const std::wstring& path) {
@@ -927,6 +932,187 @@ namespace {
         }
     }
 
+    // ---- MusicBrainz DB repository (artists_country.json) ----
+    // {"<mbid>": {"name": "...", "country": "GB", "area": {"iso-3166-1-codes": ["GB"]}, "aliases": [{"name": "..."}], ...}, ...}
+    // The file can be very large (every artist carries its relations), so it is scanned as a stream and
+    // only name, country, area ISO 3166-1 codes and alias names are kept; everything else is skipped unparsed.
+    class BufferedFile {
+    public:
+        explicit BufferedFile(const fs::path& path) : m_file(path, std::ios::binary), m_buffer(1 << 20) {}
+        bool ok() { return m_file.is_open(); }
+        int peek() { if (m_pos >= m_len && !fill()) return -1; return (unsigned char)m_buffer[m_pos]; }
+        int get() { const int c = peek(); if (c >= 0) ++m_pos; return c; }
+    private:
+        bool fill() {
+            m_file.read(m_buffer.data(), (std::streamsize)m_buffer.size());
+            m_len = (size_t)m_file.gcount();
+            m_pos = 0;
+            return m_len > 0;
+        }
+        std::ifstream m_file;
+        std::vector<char> m_buffer;
+        size_t m_pos = 0, m_len = 0;
+    };
+
+    void mbSkipWs(BufferedFile& r) {
+        for (int c = r.peek(); c == ' ' || c == '\n' || c == '\r' || c == '\t'; c = r.peek()) r.get();
+    }
+
+    int mbHex4(BufferedFile& r) {
+        int v = 0;
+        for (int i = 0; i < 4; ++i) {
+            const int c = r.get();
+            if (c < 0) return -1;
+            v <<= 4;
+            if (c >= '0' && c <= '9') v |= c - '0';
+            else if (c >= 'a' && c <= 'f') v |= c - 'a' + 10;
+            else if (c >= 'A' && c <= 'F') v |= c - 'A' + 10;
+            else return -1;
+        }
+        return v;
+    }
+
+    // Reads a string at the current position (which must be the opening quote); out may be null to skip it.
+    bool mbReadString(BufferedFile& r, std::string* out) {
+        if (r.get() != '"') return false;
+        for (;;) {
+            const int c = r.get();
+            if (c < 0) return false;
+            if (c == '"') return true;
+            if (c != '\\') { if (out) *out += (char)c; continue; }
+            const int e = r.get();
+            if (e < 0) return false;
+            if (e == 'u') {
+                int cp = mbHex4(r);
+                if (cp < 0) return false;
+                if (cp >= 0xD800 && cp < 0xDC00 && r.peek() == '\\') {
+                    r.get();
+                    if (r.get() != 'u') return false;
+                    const int low = mbHex4(r);
+                    if (low < 0) return false;
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                }
+                if (out) appendUtf8(*out, (unsigned)cp);
+                continue;
+            }
+            if (!out) continue;
+            switch (e) {
+            case 'n': *out += '\n'; break;
+            case 't': *out += '\t'; break;
+            case 'r': *out += '\r'; break;
+            case 'b': *out += '\b'; break;
+            case 'f': *out += '\f'; break;
+            default: *out += (char)e; break;
+            }
+        }
+    }
+
+    bool mbSkipValue(BufferedFile& r) {
+        mbSkipWs(r);
+        int c = r.peek();
+        if (c < 0) return false;
+        if (c == '"') return mbReadString(r, nullptr);
+        if (c == '{' || c == '[') {
+            int depth = 0;
+            bool inString = false;
+            for (;;) {
+                const int ch = r.get();
+                if (ch < 0) return false;
+                if (inString) {
+                    if (ch == '\\') r.get();
+                    else if (ch == '"') inString = false;
+                }
+                else if (ch == '"') inString = true;
+                else if (ch == '{' || ch == '[') ++depth;
+                else if (ch == '}' || ch == ']') { if (--depth == 0) return true; }
+            }
+        }
+        while ((c = r.peek()) >= 0 && c != ',' && c != '}' && c != ']' && c != ' ' && c != '\n' && c != '\r' && c != '\t') r.get();
+        return true;
+    }
+
+    // Iterates the members of the object at the current position; onKey reads or skips the value.
+    template <class OnKey>
+    bool mbObject(BufferedFile& r, OnKey onKey) {
+        mbSkipWs(r);
+        if (r.get() != '{') return false;
+        for (;;) {
+            mbSkipWs(r);
+            const int c = r.peek();
+            if (c < 0) return false;
+            if (c == '}') { r.get(); return true; }
+            if (c == ',') { r.get(); continue; }
+            std::string key;
+            if (!mbReadString(r, &key)) return false;
+            mbSkipWs(r);
+            if (r.get() != ':') return false;
+            mbSkipWs(r);
+            if (!onKey(key)) return false;
+        }
+    }
+
+    bool mbStringOrSkip(BufferedFile& r, std::string& out) {
+        if (r.peek() == '"') return mbReadString(r, &out);
+        return mbSkipValue(r);
+    }
+
+    bool parseMusicBrainzArtists(const fs::path& path, std::vector<std::pair<std::string, std::string>>& pairs, bool useAreaCodes) {
+        BufferedFile r(path);
+        if (!r.ok()) return false;
+        std::vector<std::pair<std::string, std::string>> aliasPairs;   // appended last so real names win over aliases
+        const bool ok = mbObject(r, [&](const std::string&) {
+            if (r.peek() != '{') return mbSkipValue(r);
+            std::string name, country;
+            std::vector<std::string> areaCodes, aliases;
+            if (!mbObject(r, [&](const std::string& key) {
+                if (key == "name") return mbStringOrSkip(r, name);
+                if (key == "country") return mbStringOrSkip(r, country);
+                if (key == "area" && r.peek() == '{') {
+                    return mbObject(r, [&](const std::string& areaKey) {
+                        if (areaKey != "iso-3166-1-codes" || r.peek() != '[') return mbSkipValue(r);
+                        r.get();
+                        for (;;) {
+                            mbSkipWs(r);
+                            const int c = r.peek();
+                            if (c < 0) return false;
+                            if (c == ']') { r.get(); return true; }
+                            if (c == ',') { r.get(); continue; }
+                            std::string code;
+                            if (c == '"') { if (!mbReadString(r, &code)) return false; areaCodes.push_back(code); }
+                            else if (!mbSkipValue(r)) return false;
+                        }
+                        });
+                }
+                if (key == "aliases" && r.peek() == '[') {
+                    r.get();
+                    for (;;) {
+                        mbSkipWs(r);
+                        const int c = r.peek();
+                        if (c < 0) return false;
+                        if (c == ']') { r.get(); return true; }
+                        if (c == ',') { r.get(); continue; }
+                        if (c != '{') { if (!mbSkipValue(r)) return false; continue; }
+                        std::string aliasName;
+                        if (!mbObject(r, [&](const std::string& aliasKey) {
+                            return aliasKey == "name" ? mbStringOrSkip(r, aliasName) : mbSkipValue(r);
+                            })) return false;
+                        if (!aliasName.empty()) aliases.push_back(aliasName);
+                    }
+                }
+                return mbSkipValue(r);
+                })) return false;
+            const std::string selectedCountry = useAreaCodes
+                ? (areaCodes.empty() ? std::string() : areaCodes.front())
+                : country;
+            if (selectedCountry.empty()) return true;
+            if (!name.empty()) pairs.emplace_back(name, selectedCountry);
+            for (auto& a : aliases) aliasPairs.emplace_back(std::move(a), selectedCountry);
+            return true;
+            });
+        for (auto& a : aliasPairs) pairs.push_back(std::move(a));
+        return ok || !pairs.empty();   // keep what was read if the file ends abruptly
+    }
+
     struct ArtistTable {
         std::mutex m;
         std::shared_ptr<const ArtistMap> map;
@@ -934,20 +1120,24 @@ namespace {
         bool haveStamp = false;
         std::chrono::steady_clock::time_point checked{};
         std::string path;
+        int selectionMode = -1;
     };
 
     std::shared_ptr<const ArtistMap> loadArtistTable(ArtistTable& t, const std::string& custom,
-        const char* defaultFile, int location, bool arrayFormat) {
+        const char* defaultFile, int location, int format) {   // format: 0 flat JSON, 1 worldMap.json, 2 MusicBrainz repository
         using clock = std::chrono::steady_clock;
         std::lock_guard<std::mutex> lock(t.m);
-        if (t.path != custom) {
+        const int selectionMode = format == 2 ? (int)g_cfgArtistAreaMode.get_value() : -1;
+        if (t.path != custom || t.selectionMode != selectionMode) {
             t.path = custom;
+            t.selectionMode = selectionMode;
             t.map.reset();
             t.haveStamp = false;
             ++g_generation;
         }
         const auto now = clock::now();
-        if (t.map && now - t.checked < std::chrono::seconds(5)) return t.map;
+        // The MusicBrainz repository is large and rewritten while the MusicBrainz component runs: check it less often.
+        if (t.map && now - t.checked < std::chrono::seconds(format == 2 ? 10 : 5)) return t.map;
         t.checked = now;
 
         std::error_code ec;
@@ -963,10 +1153,16 @@ namespace {
 
         t.stamp = stamp;
         t.haveStamp = true;
-        std::ifstream f(p, std::ios::binary);
-        const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
         std::vector<std::pair<std::string, std::string>> pairs;
-        const bool ok = arrayFormat ? parseArtistValJson(text, pairs) : parseFlatJsonObject(text, pairs);
+        bool ok = false;
+        if (format == 2) {
+            ok = parseMusicBrainzArtists(p, pairs, selectionMode == 1);
+        }
+        else {
+            std::ifstream f(p, std::ios::binary);
+            const std::string text((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+            ok = format == 1 ? parseArtistValJson(text, pairs) : parseFlatJsonObject(text, pairs);
+        }
         if (!ok) {
             if (!t.map) t.map = std::make_shared<const ArtistMap>();
             return t.map;
@@ -976,10 +1172,11 @@ namespace {
         for (auto& kv : pairs) {
             const std::string key = lookupKey(kv.first);
             if (key.empty()) continue;
-            const std::string country = arrayFormat ? kv.second : kv.second.substr(0, kv.second.find('-'));
+            const std::string country = format != 0 ? kv.second : kv.second.substr(0, kv.second.find('-'));
             const std::string iso = normalize(country.c_str());
             if (iso.empty()) continue;
-            (*m)[key] = iso;
+            if (format == 2) m->emplace(key, iso);    // several artists can share a name: the first one wins
+            else (*m)[key] = iso;
         }
         t.map = m;
         ++g_generation;
@@ -988,12 +1185,17 @@ namespace {
 
     std::shared_ptr<const ArtistMap> artistMap() {
         static ArtistTable t;
-        return loadArtistTable(t, trim(g_cfgArtistFile.get()), "country_codes.json", kLocJSplitterPackage, false);
+        return loadArtistTable(t, trim(g_cfgArtistFile.get()), "country_codes.json", kLocJSplitterPackage, 0);
     }
 
     std::shared_ptr<const ArtistMap> artistMap2() {
         static ArtistTable t;
-        return loadArtistTable(t, trim(g_cfgArtistFile2.get()), "worldMap.json", kLocJsData, true);
+        return loadArtistTable(t, trim(g_cfgArtistFile2.get()), "worldMap.json", kLocJsData, 1);
+    }
+
+    std::shared_ptr<const ArtistMap> artistMap3() {
+        static ArtistTable t;
+        return loadArtistTable(t, trim(g_cfgArtistFile3.get()), "artists_country.json", kLocMusicBrainz, 2);
     }
 
     const std::string* findArtist(const ArtistMap& m, const std::string& name) {
@@ -1013,14 +1215,21 @@ namespace {
         return nullptr;
     }
 
+    // Looks the artist up in the three tables; the order setting decides which table is asked first
+    // (0 = worldMap.json, 1 = country_codes.json, 2 = MusicBrainz artists_country.json), the others follow.
     const std::string* findPreferred(const std::shared_ptr<const ArtistMap>& flatMap,
-        const std::shared_ptr<const ArtistMap>& worldMap, const std::string& name) {
-        const bool flatFirst = g_cfgTableOrder.get_value() == 1;
-        const std::shared_ptr<const ArtistMap>& first = flatFirst ? flatMap : worldMap;
-        const std::shared_ptr<const ArtistMap>& second = flatFirst ? worldMap : flatMap;
-        const std::string* iso = first ? findArtist(*first, name) : nullptr;
-        if (!iso && second) iso = findArtist(*second, name);
-        return iso;
+        const std::shared_ptr<const ArtistMap>& worldMap, const std::shared_ptr<const ArtistMap>& musicBrainzMap,
+        const std::string& name) {
+        const int order = g_cfgTableOrder.get_value();
+        const std::shared_ptr<const ArtistMap>* sequence[3];
+        if (order == 1) { sequence[0] = &flatMap; sequence[1] = &worldMap; sequence[2] = &musicBrainzMap; }
+        else if (order == 2) { sequence[0] = &musicBrainzMap; sequence[1] = &worldMap; sequence[2] = &flatMap; }
+        else { sequence[0] = &worldMap; sequence[1] = &flatMap; sequence[2] = &musicBrainzMap; }
+        for (const auto* table : sequence) {
+            if (!*table) continue;
+            if (const std::string* iso = findArtist(**table, name)) return iso;
+        }
+        return nullptr;
     }
 
     struct DynamicArtists {
@@ -1092,15 +1301,45 @@ namespace {
     };
     play_callback_static_factory_t<dynamic_artist_callback> g_dynamic_artist_callback;
 
+    std::vector<std::string> splitOn(const std::vector<std::string>& parts, const std::string& sep) {
+        std::vector<std::string> out;
+        for (const auto& part : parts) {
+            size_t pos = 0;
+            for (;;) {
+                const size_t hit = part.find(sep, pos);
+                if (hit == std::string::npos) { out.push_back(part.substr(pos)); break; }
+                out.push_back(part.substr(pos, hit - pos));
+                pos = hit + sep.size();
+            }
+        }
+        return out;
+    }
+
+    // Separators that join several artists in one tag value ("A; B", "A & B", ...).
+    const char* const kArtistSeparators[] = { " & ", " and ", " versus ", " vs. ", " vs ", " + ", ", ", ";", " / ", " x " };
+
     std::vector<std::string> artistLookupCountries(metadb_handle* h) {
         std::vector<std::string> countries;
         const auto map = artistMap();
         const auto map2 = artistMap2();
-        if ((!map || map->empty()) && (!map2 || map2->empty())) return countries;
-        auto add = [&](const std::string& name) {
-            const std::string* iso = findPreferred(map, map2, name);
+        const auto map3 = artistMap3();
+        if ((!map || map->empty()) && (!map2 || map2->empty()) && (!map3 || map3->empty())) return countries;
+        auto addIso = [&](const std::string* iso) {
             if (iso && std::find(countries.begin(), countries.end(), *iso) == countries.end())
                 countries.push_back(*iso);
+            };
+        // A value is looked up as a whole first ("Tyler, The Creator"); when that fails it is split at
+        // the usual separators ("Artist1; Artist2") and every part found adds its country.
+        auto add = [&](const std::string& name) {
+            if (const std::string* iso = findPreferred(map, map2, map3, name)) { addIso(iso); return; }
+            const std::string key = lookupKey(name);
+            if (key.empty()) return;
+            std::vector<std::string> parts{ key };
+            for (const char* sep : kArtistSeparators) parts = splitOn(parts, sep);
+            for (const auto& part : parts) {
+                if (part.empty() || part == key) continue;
+                addIso(findPreferred(map, map2, map3, part));
+            }
             };
 
         std::vector<std::string> dynamic;
@@ -1125,33 +1364,20 @@ namespace {
         return countries;
     }
 
-    std::vector<std::string> splitOn(const std::vector<std::string>& parts, const std::string& sep) {
-        std::vector<std::string> out;
-        for (const auto& part : parts) {
-            size_t pos = 0;
-            for (;;) {
-                const size_t hit = part.find(sep, pos);
-                if (hit == std::string::npos) { out.push_back(part.substr(pos)); break; }
-                out.push_back(part.substr(pos, hit - pos));
-                pos = hit + sep.size();
-            }
-        }
-        return out;
-    }
-
     std::vector<std::string> lookupArtistName(const std::string& name) {
         std::vector<std::string> result;
         const auto map = artistMap();
         const auto map2 = artistMap2();
+        const auto map3 = artistMap3();
         auto find = [&](const std::string& n) -> const std::string* {
-            return findPreferred(map, map2, n);
+            return findPreferred(map, map2, map3, n);
             };
         if (const std::string* iso = find(name)) { result.push_back(*iso); return result; }
 
         const std::string key = lookupKey(name);
         if (key.empty()) return result;
         std::vector<std::string> parts{ key };
-        for (const char* sep : { " & ", " and ", " versus ", " vs. ", " vs ", " + ", ", ", "; ", " / ", " x " })
+        for (const char* sep : kArtistSeparators)
             parts = splitOn(parts, sep);
         for (const auto& part : parts) {
             if (part == key || part.empty()) continue;
@@ -1245,8 +1471,20 @@ namespace {
         return *c;
     }
 
+    // Creates the default data folder (profile\\foo_countryflags_data) when it does not exist yet, so
+    // there is a place to put countries.txt, regions.txt and the flags folder. The flags subfolder is
+    // deliberately NOT created.
+    void ensureDataFolder() {
+        const std::wstring& prof = profileDirWide();
+        if (prof.empty()) return;
+        std::error_code ec;
+        const fs::path dir = fs::path(prof) / L"foo_countryflags_data";
+        if (!fs::exists(dir, ec)) fs::create_directories(dir, ec);
+    }
+
     class quit_cleanup : public initquit {
     public:
+        void on_init() override { ensureDataFolder(); }
         void on_quit() override {
             for (size_t i = 0; i < 10; ++i) {
                 ScriptCache& c = sourceScriptCache(i);
@@ -1392,6 +1630,21 @@ namespace {
     constexpr int ID_ARTIST_BROWSE = 1014;
     constexpr int ID_ARTIST2_FILE = 1015;
     constexpr int ID_ARTIST2_BROWSE = 1016;
+    constexpr int ID_ARTIST3_FILE = 1026;
+    constexpr int ID_ARTIST3_BROWSE = 1027;
+    constexpr int ID_STATUS_ARTIST3 = 1028;
+    constexpr int ID_ORDER_MB = 1043;
+    constexpr int ID_ARTIST_FIELD_COUNTRY = 1044;
+    constexpr int ID_ARTIST_FIELD_AREA = 1045;
+    constexpr int ID_ALIASES_FILE = 1029;
+    constexpr int ID_ALIASES_BROWSE = 1030;
+    constexpr int ID_STATUS_ALIASES = 1036;
+    constexpr int ID_COUNTRIES_FILE = 1017;
+    constexpr int ID_COUNTRIES_BROWSE = 1018;
+    constexpr int ID_REGIONS_FILE = 1019;
+    constexpr int ID_REGIONS_BROWSE = 1020;
+    constexpr int ID_STATUS_COUNTRIES = 1024;
+    constexpr int ID_STATUS_REGIONS = 1025;
     constexpr int ID_STATUS_FLAG = 1021;
     constexpr int ID_STATUS_ARTIST = 1022;
     constexpr int ID_STATUS_ARTIST2 = 1023;
@@ -1415,7 +1668,7 @@ namespace {
     const int kEditIds[] = {
         ID_SOURCE1, ID_SOURCE2, ID_SOURCE3, ID_SOURCE4, ID_SOURCE5,
         ID_FALLBACK1, ID_FALLBACK2, ID_FALLBACK3, ID_FALLBACK4, ID_FALLBACK5,
-        ID_FLAG_DIR, ID_ARTIST_FILE, ID_ARTIST2_FILE,
+        ID_FLAG_DIR, ID_ARTIST_FILE, ID_ARTIST2_FILE, ID_COUNTRIES_FILE, ID_REGIONS_FILE, ID_ARTIST3_FILE, ID_ALIASES_FILE,
         ID_PREFIX1, ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5
     };
 
@@ -1930,13 +2183,14 @@ namespace {
     class country_flags_preferences_instance : public preferences_page_instance {
     public:
         country_flags_preferences_instance(HWND parent, preferences_page_callback::ptr callback)
-            : m_callback(callback), m_wnd(nullptr), m_tabWnd(nullptr), m_tab1Wnd(nullptr), m_tab2Wnd(nullptr), m_tab3Wnd(nullptr), m_fieldList(nullptr), m_fieldHint(nullptr), m_copyBtn(nullptr),
-            m_ready(false), m_originalOrder(0),
+            : m_callback(callback), m_wnd(nullptr), m_tabWnd(nullptr), m_tab1Wnd(nullptr), m_tab2Wnd(nullptr), m_tab3Wnd(nullptr), m_tab4Wnd(nullptr), m_fieldList(nullptr), m_fieldHint(nullptr), m_copyBtn(nullptr),
+            m_ready(false), m_originalOrder(0), m_originalArtistField(0),
             m_note(nullptr), m_boldFont(nullptr), m_settingScript(false),
             m_previewLabel(nullptr), m_previewBox(nullptr), m_importBtn(nullptr), m_exportBtn(nullptr),
-            m_flagLabel(nullptr), m_artistLabel(nullptr), m_artist2Label(nullptr),
-            m_orderLabel(nullptr), m_orderWorld(nullptr), m_orderFlat(nullptr),
-            m_statusFlag(nullptr), m_statusArtist(nullptr), m_statusArtist2(nullptr),
+            m_flagLabel(nullptr), m_artistLabel(nullptr), m_artist2Label(nullptr), m_countriesLabel(nullptr), m_regionsLabel(nullptr), m_artist3Label(nullptr), m_aliasesLabel(nullptr),
+            m_orderLabel(nullptr), m_orderWorld(nullptr), m_orderFlat(nullptr), m_orderMb(nullptr),
+            m_artistFieldLabel(nullptr), m_artistFieldCountry(nullptr), m_artistFieldArea(nullptr),
+            m_statusFlag(nullptr), m_statusArtist(nullptr), m_statusArtist2(nullptr), m_statusCountries(nullptr), m_statusRegions(nullptr), m_statusArtist3(nullptr), m_statusAliases(nullptr),
             m_statusFont(nullptr), m_brDark(CreateSolidBrush(RGB(32, 32, 32))) {
 
             INITCOMMONCONTROLSEX icc = { sizeof(icc), ICC_TAB_CLASSES | ICC_LISTVIEW_CLASSES };
@@ -1995,8 +2249,10 @@ namespace {
                 TabCtrl_InsertItem(m_tabWnd, 0, &tie);
                 tie.pszText = const_cast<LPWSTR>(L"Folders");
                 TabCtrl_InsertItem(m_tabWnd, 1, &tie);
-                tie.pszText = const_cast<LPWSTR>(L"Fields");
+                tie.pszText = const_cast<LPWSTR>(L"Artist tables");
                 TabCtrl_InsertItem(m_tabWnd, 2, &tie);
+                tie.pszText = const_cast<LPWSTR>(L"Fields");
+                TabCtrl_InsertItem(m_tabWnd, 3, &tie);
 
                 RECT rcTab{};
                 GetClientRect(m_tabWnd, &rcTab);
@@ -2017,6 +2273,10 @@ namespace {
                     WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                     rcTab.left, rcTab.top, tabW, tabH, m_tabWnd, nullptr, hInstance, this);
                 ShowWindow(m_tab3Wnd, SW_HIDE);
+                m_tab4Wnd = CreateWindowExW(0, L"CountryFlagsTabChildPage", L"",
+                    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    rcTab.left, rcTab.top, tabW, tabH, m_tabWnd, nullptr, hInstance, this);
+                ShowWindow(m_tab4Wnd, SW_HIDE);
                 createTab1Controls();
                 createTab2Controls();
                 createTab3Controls();
@@ -2029,6 +2289,7 @@ namespace {
                 m_tab1DarkMode.AddDialogWithControls(m_tab1Wnd);
                 m_tab2DarkMode.AddDialogWithControls(m_tab2Wnd);
                 m_tab3DarkMode.AddDialogWithControls(m_tab3Wnd);
+                m_tab4DarkMode.AddDialogWithControls(m_tab4Wnd);
                 m_ready = true;
 
                 layoutControls(initW, initH);
@@ -2061,6 +2322,9 @@ namespace {
             if (!m_wnd) return;
             std::string fieldsBefore[5];
             for (size_t i = 0; i < 5; ++i) fieldsBefore[i] = fieldPrefix(i);
+            const std::string countriesBefore = trim(g_cfgCountriesFile.get());
+            const std::string regionsBefore = trim(g_cfgRegionsFile.get());
+            const std::string aliasesBefore = trim(g_cfgAliasesFile.get());
             saveEdit(ID_SOURCE1, g_cfgSource1);
             saveEdit(ID_SOURCE2, g_cfgSource2);
             saveEdit(ID_SOURCE3, g_cfgSource3);
@@ -2074,7 +2338,12 @@ namespace {
             saveEdit(ID_FLAG_DIR, g_cfgDir);
             saveEdit(ID_ARTIST_FILE, g_cfgArtistFile);
             saveEdit(ID_ARTIST2_FILE, g_cfgArtistFile2);
+            saveEdit(ID_COUNTRIES_FILE, g_cfgCountriesFile);
+            saveEdit(ID_REGIONS_FILE, g_cfgRegionsFile);
+            saveEdit(ID_ARTIST3_FILE, g_cfgArtistFile3);
+            saveEdit(ID_ALIASES_FILE, g_cfgAliasesFile);
             g_cfgTableOrder = orderSelection();
+            g_cfgArtistAreaMode = artistFieldSelection();
 
             const int prefixIDs[] = { ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
             for (size_t i = 0; i < 4; ++i) {
@@ -2095,10 +2364,18 @@ namespace {
             bool renamed = false;
             for (size_t i = 0; i < 5; ++i)
                 if (fieldPrefix(i) != fieldsBefore[i]) { renamed = true; break; }
-            if (renamed) {
+            const bool dataMoved = trim(g_cfgCountriesFile.get()) != countriesBefore || trim(g_cfgRegionsFile.get()) != regionsBefore
+                || trim(g_cfgAliasesFile.get()) != aliasesBefore;
+            if (renamed || dataMoved) {
+                std::string reason;
+                if (renamed) reason = "A field suffix was changed. foobar2000 reads field names at startup, so the new names only take effect after a restart.";
+                if (dataMoved) {
+                    if (!reason.empty()) reason += "\n\n";
+                    reason += "The location of countries.txt, regions.txt or aliases.txt was changed. These files are only read at startup, so the change only takes effect after a restart.";
+                }
                 HWND owner = m_wnd ? GetAncestor(m_wnd, GA_ROOT) : nullptr;
                 const int answer = themed_message::show(owner, "Country Flags",
-                    "A field suffix was changed. foobar2000 reads field names at startup, so the new names only take effect after a restart.\n\nRestart foobar2000 now?",
+                    reason + "\n\nRestart foobar2000 now?",
                     true, IDI_QUESTION);
                 if (answer == IDYES) {
                     fb2k::inMainThread([] {
@@ -2123,7 +2400,13 @@ namespace {
             setEdit(ID_FLAG_DIR, "");
             setEdit(ID_ARTIST_FILE, "");
             setEdit(ID_ARTIST2_FILE, "");
+            setEdit(ID_COUNTRIES_FILE, "");
+            setEdit(ID_REGIONS_FILE, "");
+            setEdit(ID_ARTIST3_FILE, "");
+            setEdit(ID_ALIASES_FILE, "");
+            fillDefaultPaths();
             setOrder(0);
+            setArtistFieldSelection(0);
             setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, "artist");
             setEdit(ID_PREFIX3, "3");
@@ -2194,9 +2477,11 @@ namespace {
                 HDC dc = (HDC)wp;
                 HWND ctrl = (HWND)lp;
                 int id = GetDlgCtrlID(ctrl);
-                if (id == ID_STATUS_FLAG || id == ID_STATUS_ARTIST || id == ID_STATUS_ARTIST2) {
-                    int idx = (id == ID_STATUS_FLAG) ? 0 : (id == ID_STATUS_ARTIST2 ? 1 : 2);
-                    SetTextColor(dc, m_statusColor[idx]);
+                const int statusIds[7] = { ID_STATUS_FLAG, ID_STATUS_ARTIST2, ID_STATUS_ARTIST, ID_STATUS_COUNTRIES, ID_STATUS_REGIONS, ID_STATUS_ARTIST3, ID_STATUS_ALIASES };
+                int statusIdx = -1;
+                for (int k = 0; k < 7; ++k) if (id == statusIds[k]) statusIdx = k;
+                if (statusIdx >= 0) {
+                    SetTextColor(dc, m_statusColor[statusIdx]);
                     SetBkMode(dc, TRANSPARENT);
                     return reinterpret_cast<INT_PTR>(dark ? m_brDark : GetSysColorBrush(COLOR_BTNFACE));
                 }
@@ -2210,7 +2495,7 @@ namespace {
             }
 
             // Forward commands and notifications from child tabs up to main preferences handler
-            if ((wnd == m_tab1Wnd || wnd == m_tab2Wnd || wnd == m_tab3Wnd)) {
+            if ((wnd == m_tab1Wnd || wnd == m_tab2Wnd || wnd == m_tab3Wnd || wnd == m_tab4Wnd)) {
                 if (msg == WM_SIZE && wnd == m_tab3Wnd) layoutFieldsTab();
                 if ((msg == WM_COMMAND || msg == WM_NOTIFY) && m_wnd) {
                     return SendMessageW(m_wnd, msg, wp, lp);
@@ -2228,8 +2513,9 @@ namespace {
                     int sel = TabCtrl_GetCurSel(m_tabWnd);
                     ShowWindow(m_tab1Wnd, sel == 0 ? SW_SHOW : SW_HIDE);
                     ShowWindow(m_tab2Wnd, sel == 1 ? SW_SHOW : SW_HIDE);
-                    ShowWindow(m_tab3Wnd, sel == 2 ? SW_SHOW : SW_HIDE);
-                    if (sel == 2) { ensureFieldList(); layoutFieldsTab(); refreshFieldList(); }
+                    ShowWindow(m_tab4Wnd, sel == 2 ? SW_SHOW : SW_HIDE);
+                    ShowWindow(m_tab3Wnd, sel == 3 ? SW_SHOW : SW_HIDE);
+                    if (sel == 3) { ensureFieldList(); layoutFieldsTab(); refreshFieldList(); }
                     return 0;
                 }
                 if (nm && nm->idFrom == ID_FIELDLIST) {
@@ -2253,8 +2539,15 @@ namespace {
                 case ID_BROWSE: browseForFlagFolder(); return 0;
                 case ID_ARTIST_BROWSE: browseForArtistFile(ID_ARTIST_FILE); return 0;
                 case ID_ARTIST2_BROWSE: browseForArtistFile(ID_ARTIST2_FILE); return 0;
+                case ID_ARTIST3_BROWSE: browseForArtistFile(ID_ARTIST3_FILE); return 0;
+                case ID_ALIASES_BROWSE: browseForArtistFile(ID_ALIASES_FILE, true); return 0;
+                case ID_COUNTRIES_BROWSE: browseForArtistFile(ID_COUNTRIES_FILE, true); return 0;
+                case ID_REGIONS_BROWSE: browseForArtistFile(ID_REGIONS_FILE, true); return 0;
                 case ID_ORDER_WORLD:
                 case ID_ORDER_FLAT:
+                case ID_ORDER_MB:
+                case ID_ARTIST_FIELD_COUNTRY:
+                case ID_ARTIST_FIELD_AREA:
                     if (m_ready && m_callback.is_valid()) m_callback->on_state_changed();
                     return 0;
                 case ID_COPYFIELD: copySelectedFields(); return 0;
@@ -2278,7 +2571,7 @@ namespace {
                 if (m_ready) {
                     const int id = LOWORD(wp);
                     if (id >= ID_PREFIX2 && id <= ID_PREFIX5) refreshFieldList();
-                    if (id == ID_FLAG_DIR || id == ID_ARTIST_FILE || id == ID_ARTIST2_FILE) updateStatus();
+                    if (id == ID_FLAG_DIR || id == ID_ARTIST_FILE || id == ID_ARTIST2_FILE || id == ID_COUNTRIES_FILE || id == ID_REGIONS_FILE || id == ID_ARTIST3_FILE || id == ID_ALIASES_FILE) updateStatus();
                     if (m_callback.is_valid()) m_callback->on_state_changed();
                 }
             }
@@ -2293,6 +2586,7 @@ namespace {
                 if (m_tab1Wnd) InvalidateRect(m_tab1Wnd, nullptr, TRUE);
                 if (m_tab2Wnd) InvalidateRect(m_tab2Wnd, nullptr, TRUE);
                 if (m_tab3Wnd) InvalidateRect(m_tab3Wnd, nullptr, TRUE);
+                if (m_tab4Wnd) InvalidateRect(m_tab4Wnd, nullptr, TRUE);
                 applyFieldListColors();
             }
             if (msg == WM_TIMER && (wp == kPreviewTimer || wp == kPreviewSoon)) {
@@ -2328,7 +2622,9 @@ namespace {
         HWND control(int id) const {
             HWND c = GetDlgItem(m_tab1Wnd, id);
             if (c) return c;
-            return GetDlgItem(m_tab2Wnd, id);
+            c = GetDlgItem(m_tab2Wnd, id);
+            if (c) return c;
+            return GetDlgItem(m_tab4Wnd, id);
         }
 
         HWND addLabel(HWND parent, const wchar_t* text, int id = 0) const {
@@ -2413,7 +2709,7 @@ namespace {
             buildFonts();
             EnumChildWindows(m_wnd, setFontProc, reinterpret_cast<LPARAM>(m_uiFont));
             for (int i = 0; i < 5; ++i) if (m_rowLabel[i]) SendMessageW(m_rowLabel[i], WM_SETFONT, reinterpret_cast<WPARAM>(m_boldFont), TRUE);
-            for (HWND st : { m_statusFlag, m_statusArtist, m_statusArtist2 })
+            for (HWND st : { m_statusFlag, m_statusArtist, m_statusArtist2, m_statusCountries, m_statusRegions, m_statusArtist3, m_statusAliases })
                 if (st) SendMessageW(st, WM_SETFONT, reinterpret_cast<WPARAM>(m_statusFont), TRUE);
             if (oldUi) DeleteObject(oldUi);
             if (oldBold) DeleteObject(oldBold);
@@ -2721,7 +3017,12 @@ namespace {
             data += "flags.folder=" + escapeValue(readEdit(ID_FLAG_DIR)) + "\n";
             data += "table.file=" + escapeValue(readEdit(ID_ARTIST_FILE)) + "\n";
             data += "table.file2=" + escapeValue(readEdit(ID_ARTIST2_FILE)) + "\n";
-            data += std::string("table.order=") + (orderSelection() == 1 ? "flat" : "world") + "\n";
+            data += "table.file3=" + escapeValue(readEdit(ID_ARTIST3_FILE)) + "\n";
+            data += std::string("table.artist-field=") + (artistFieldSelection() == 1 ? "area" : "country") + "\n";
+            data += "aliases.file=" + escapeValue(readEdit(ID_ALIASES_FILE)) + "\n";
+            data += "countries.file=" + escapeValue(readEdit(ID_COUNTRIES_FILE)) + "\n";
+            data += "regions.file=" + escapeValue(readEdit(ID_REGIONS_FILE)) + "\n";
+            data += std::string("table.order=") + (orderSelection() == 2 ? "musicbrainz" : orderSelection() == 1 ? "flat" : "world") + "\n";
             FILE* f = nullptr;
             const bool ok = _wfopen_s(&f, path.c_str(), L"wb") == 0 && f
                 && fwrite(data.data(), 1, data.size(), f) == data.size();
@@ -2788,7 +3089,13 @@ namespace {
             if (const std::string* v = get("flags.folder")) setEdit(ID_FLAG_DIR, v->c_str());
             if (const std::string* v = get("table.file")) setEdit(ID_ARTIST_FILE, v->c_str());
             if (const std::string* v = get("table.file2")) setEdit(ID_ARTIST2_FILE, v->c_str());
-            if (const std::string* v = get("table.order")) setOrder(*v == "flat" ? 1 : 0);
+            if (const std::string* v = get("table.file3")) setEdit(ID_ARTIST3_FILE, v->c_str());
+            if (const std::string* v = get("table.artist-field")) setArtistFieldSelection(*v == "area" ? 1 : 0);
+            if (const std::string* v = get("aliases.file")) setEdit(ID_ALIASES_FILE, v->c_str());
+            if (const std::string* v = get("countries.file")) setEdit(ID_COUNTRIES_FILE, v->c_str());
+            if (const std::string* v = get("regions.file")) setEdit(ID_REGIONS_FILE, v->c_str());
+            if (const std::string* v = get("table.order")) setOrder(*v == "musicbrainz" ? 2 : *v == "flat" ? 1 : 0);
+            fillDefaultPaths();
             updateStatus();
             updatePreview();
             if (m_callback.is_valid()) m_callback->on_state_changed();
@@ -2828,30 +3135,67 @@ namespace {
         }
 
         void createTab2Controls() {
-            m_flagLabel = addLabel(m_tab2Wnd, L"Flag image folder (empty = component's flags folder)");
+            m_flagLabel = addLabel(m_tab2Wnd, L"Flag image folder (empty = profile\\foo_countryflags_data\\flags)");
             m_statusFlag = addStatus(m_tab2Wnd, ID_STATUS_FLAG);
             addEdit(m_tab2Wnd, ID_FLAG_DIR);
             addButton(m_tab2Wnd, ID_BROWSE);
 
-            m_artist2Label = addLabel(m_tab2Wnd, L"Artist table worldMap.json: last item of val = country (empty = profile\\js_data\\worldMap.json, else next to the component)");
-            m_statusArtist2 = addStatus(m_tab2Wnd, ID_STATUS_ARTIST2);
-            addEdit(m_tab2Wnd, ID_ARTIST2_FILE);
-            addButton(m_tab2Wnd, ID_ARTIST2_BROWSE);
+            m_countriesLabel = addLabel(m_tab2Wnd, L"countries.txt: optional country list overrides, lines ISO2|ISO3|Name (empty = profile\\foo_countryflags_data\\countries.txt; read at startup)");
+            m_statusCountries = addStatus(m_tab2Wnd, ID_STATUS_COUNTRIES);
+            addEdit(m_tab2Wnd, ID_COUNTRIES_FILE);
+            addButton(m_tab2Wnd, ID_COUNTRIES_BROWSE);
 
-            m_artistLabel = addLabel(m_tab2Wnd, L"Artist table country_codes.json: {\"artist\": \"CC\"} (empty = JSplitter package_data folder if the file is there, else next to the component)");
-            m_statusArtist = addStatus(m_tab2Wnd, ID_STATUS_ARTIST);
-            addEdit(m_tab2Wnd, ID_ARTIST_FILE);
-            addButton(m_tab2Wnd, ID_ARTIST_BROWSE);
+            m_regionsLabel = addLabel(m_tab2Wnd, L"regions.txt: optional cultural region overrides (empty = profile\\foo_countryflags_data\\regions.txt; read at startup)");
+            m_statusRegions = addStatus(m_tab2Wnd, ID_STATUS_REGIONS);
+            addEdit(m_tab2Wnd, ID_REGIONS_FILE);
+            addButton(m_tab2Wnd, ID_REGIONS_BROWSE);
 
-            m_orderLabel = addLabel(m_tab2Wnd, L"When an artist is in both tables, use the country from:");
-            m_orderWorld = CreateWindowExW(0, L"BUTTON", L"worldMap.json (overrides country_codes.json)",
+            m_aliasesLabel = addLabel(m_tab2Wnd, L"aliases.txt: your own country aliases, lines alias|ISO2, ISO3 or country name (empty = profile\\foo_countryflags_data\\aliases.txt; read at startup)");
+            m_statusAliases = addStatus(m_tab2Wnd, ID_STATUS_ALIASES);
+            addEdit(m_tab2Wnd, ID_ALIASES_FILE);
+            addButton(m_tab2Wnd, ID_ALIASES_BROWSE);
+
+            m_artist2Label = addLabel(m_tab4Wnd, L"Artist table worldMap.json: last item of val = country (empty = profile\\js_data\\worldMap.json if it exists, else profile\\foo_countryflags_data\\worldMap.json)");
+            m_statusArtist2 = addStatus(m_tab4Wnd, ID_STATUS_ARTIST2);
+            addEdit(m_tab4Wnd, ID_ARTIST2_FILE);
+            addButton(m_tab4Wnd, ID_ARTIST2_BROWSE);
+
+            m_artistLabel = addLabel(m_tab4Wnd, L"Artist table country_codes.json: {\"artist\": \"CC\"} (empty = JSplitter package_data folder if the file is there, else profile\\foo_countryflags_data\\country_codes.json)");
+            m_statusArtist = addStatus(m_tab4Wnd, ID_STATUS_ARTIST);
+            addEdit(m_tab4Wnd, ID_ARTIST_FILE);
+            addButton(m_tab4Wnd, ID_ARTIST_BROWSE);
+
+            m_artist3Label = addLabel(m_tab4Wnd, L"Artist table artists_country.json (MusicBrainz: name, aliases, country and area codes) (empty = profile\\foo_musicbrainz_db\\repository\\artists\\artists_country.json, else profile\\foo_countryflags_data\\artists_country.json)");
+            m_statusArtist3 = addStatus(m_tab4Wnd, ID_STATUS_ARTIST3);
+            addEdit(m_tab4Wnd, ID_ARTIST3_FILE);
+            addButton(m_tab4Wnd, ID_ARTIST3_BROWSE);
+
+            m_artistFieldLabel = addLabel(m_tab4Wnd, L"MusicBrainz artist country field:");
+            m_artistFieldCountry = CreateWindowExW(0, L"BUTTON", L"country",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
-                0, 0, 10, 10, m_tab2Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ORDER_WORLD)),
+                0, 0, 10, 10, m_tab4Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ARTIST_FIELD_COUNTRY)),
                 core_api::get_my_instance(), nullptr);
-            m_orderFlat = CreateWindowExW(0, L"BUTTON", L"country_codes.json (overrides worldMap.json)",
+            m_artistFieldArea = CreateWindowExW(0, L"BUTTON", L"area.iso-3166-1-codes",
                 WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
-                0, 0, 10, 10, m_tab2Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ORDER_FLAT)),
+                0, 0, 10, 10, m_tab4Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ARTIST_FIELD_AREA)),
                 core_api::get_my_instance(), nullptr);
+            SendMessageW(m_artistFieldCountry, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
+            SendMessageW(m_artistFieldArea, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
+
+            m_orderLabel = addLabel(m_tab4Wnd, L"When an artist is in several tables, use the country from:");
+            m_orderWorld = CreateWindowExW(0, L"BUTTON", L"worldMap.json first",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_GROUP | BS_AUTORADIOBUTTON,
+                0, 0, 10, 10, m_tab4Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ORDER_WORLD)),
+                core_api::get_my_instance(), nullptr);
+            m_orderFlat = CreateWindowExW(0, L"BUTTON", L"country_codes.json first",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                0, 0, 10, 10, m_tab4Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ORDER_FLAT)),
+                core_api::get_my_instance(), nullptr);
+            m_orderMb = CreateWindowExW(0, L"BUTTON", L"artists_country.json (MusicBrainz) first",
+                WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_AUTORADIOBUTTON,
+                0, 0, 10, 10, m_tab4Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_ORDER_MB)),
+                core_api::get_my_instance(), nullptr);
+            SendMessageW(m_orderMb, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             SendMessageW(m_orderWorld, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             SendMessageW(m_orderFlat, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             createImportExportControls();
@@ -2909,6 +3253,7 @@ namespace {
             if (m_tab1Wnd) SetWindowPos(m_tab1Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
             if (m_tab2Wnd) SetWindowPos(m_tab2Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
             if (m_tab3Wnd) SetWindowPos(m_tab3Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
+            if (m_tab4Wnd) SetWindowPos(m_tab4Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
 
             layoutFieldsTab();
 
@@ -2964,49 +3309,78 @@ namespace {
             y1 += V(nominalPreviewLabelH) + rowGap;
             place(m_previewBox, margin, y1, fullW1, (std::max)(V(nominalPreviewH), tabH - y1 - V(nominalTop)));
 
-            // --- Layout Tab 2 (Folders) ---
+            // --- Layout Tab 2 (Folders) and Tab 4 (Artist tables) ---
             const int fullW2 = (std::max)(S(100), tabW - 2 * margin);
-            int y2 = S(12);
-            if (m_flagLabel) SetWindowPos(m_flagLabel, nullptr, margin, y2, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE); y2 += S(21);
-
-            auto pathRow = [&](HWND tabParent, HWND status, int editId, int browseId) {
+            auto pathRow = [&](int& y, HWND tabParent, HWND status, int editId, int browseId) {
                 if (!status) return;
                 const int actualStatusW = (std::min)(statusW, (std::max)(S(12), fullW2 / 12));
                 const int actualBrowseW = (std::min)(browseW, (std::max)(S(52), fullW2 / 4));
                 const int editW = (std::max)(S(20), fullW2 - actualStatusW - actualBrowseW - 3 * gap);
-                SetWindowPos(status, nullptr, margin, y2 + S(3), actualStatusW, rowH, SWP_NOZORDER | SWP_NOACTIVATE);
+                SetWindowPos(status, nullptr, margin, y + S(3), actualStatusW, rowH, SWP_NOZORDER | SWP_NOACTIVATE);
                 HWND hwEdit = GetDlgItem(tabParent, editId);
                 HWND hwBrowse = GetDlgItem(tabParent, browseId);
-                if (hwEdit) SetWindowPos(hwEdit, nullptr, margin + actualStatusW + gap, y2, editW, rowH, SWP_NOZORDER | SWP_NOACTIVATE);
-                if (hwBrowse) SetWindowPos(hwBrowse, nullptr, margin + actualStatusW + gap + editW + gap, y2, actualBrowseW, rowH, SWP_NOZORDER | SWP_NOACTIVATE);
-                y2 += rowH + S(12);
+                if (hwEdit) SetWindowPos(hwEdit, nullptr, margin + actualStatusW + gap, y, editW, rowH, SWP_NOZORDER | SWP_NOACTIVATE);
+                if (hwBrowse) SetWindowPos(hwBrowse, nullptr, margin + actualStatusW + gap + editW + gap, y, actualBrowseW, rowH, SWP_NOZORDER | SWP_NOACTIVATE);
+                y += rowH + S(8);
+                };
+            auto labelRow = [&](int& y, HWND label, int height) {
+                if (label) SetWindowPos(label, nullptr, margin, y, fullW2, height, SWP_NOZORDER | SWP_NOACTIVATE);
+                y += height + S(3);
                 };
 
-            pathRow(m_tab2Wnd, m_statusFlag, ID_FLAG_DIR, ID_BROWSE);
-            if (m_artist2Label) SetWindowPos(m_artist2Label, nullptr, margin, y2, fullW2, S(34), SWP_NOZORDER | SWP_NOACTIVATE); y2 += S(37);
-            pathRow(m_tab2Wnd, m_statusArtist2, ID_ARTIST2_FILE, ID_ARTIST2_BROWSE);
-            if (m_artistLabel) SetWindowPos(m_artistLabel, nullptr, margin, y2, fullW2, S(30), SWP_NOZORDER | SWP_NOACTIVATE); y2 += S(33);
-            pathRow(m_tab2Wnd, m_statusArtist, ID_ARTIST_FILE, ID_ARTIST_BROWSE);
-            if (m_orderLabel) SetWindowPos(m_orderLabel, nullptr, margin, y2, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE); y2 += S(22);
-            if (m_orderWorld) SetWindowPos(m_orderWorld, nullptr, margin + S(8), y2, fullW2 - S(8), S(22), SWP_NOZORDER | SWP_NOACTIVATE); y2 += S(25);
-            if (m_orderFlat) SetWindowPos(m_orderFlat, nullptr, margin + S(8), y2, fullW2 - S(8), S(22), SWP_NOZORDER | SWP_NOACTIVATE);
-            y2 += S(40);
-            const int ieW = S(90);
+            int y2 = S(12);
+            labelRow(y2, m_flagLabel, S(34));
+            pathRow(y2, m_tab2Wnd, m_statusFlag, ID_FLAG_DIR, ID_BROWSE);
+            labelRow(y2, m_countriesLabel, S(34));
+            pathRow(y2, m_tab2Wnd, m_statusCountries, ID_COUNTRIES_FILE, ID_COUNTRIES_BROWSE);
+            labelRow(y2, m_regionsLabel, S(34));
+            pathRow(y2, m_tab2Wnd, m_statusRegions, ID_REGIONS_FILE, ID_REGIONS_BROWSE);
+            labelRow(y2, m_aliasesLabel, S(34));
+            pathRow(y2, m_tab2Wnd, m_statusAliases, ID_ALIASES_FILE, ID_ALIASES_BROWSE);
+            // Settings file buttons below the paths.
+            y2 += S(6);
+            const int ieW = S(120);
             if (m_ieLabel) SetWindowPos(m_ieLabel, nullptr, margin, y2, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE);
             y2 += S(22);
             if (m_importBtn) SetWindowPos(m_importBtn, nullptr, margin, y2, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
             if (m_exportBtn) SetWindowPos(m_exportBtn, nullptr, margin + ieW + gap, y2, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
+
+            int y4 = S(12);
+            labelRow(y4, m_artist2Label, S(34));
+            pathRow(y4, m_tab4Wnd, m_statusArtist2, ID_ARTIST2_FILE, ID_ARTIST2_BROWSE);
+            labelRow(y4, m_artistLabel, S(34));
+            pathRow(y4, m_tab4Wnd, m_statusArtist, ID_ARTIST_FILE, ID_ARTIST_BROWSE);
+            labelRow(y4, m_artist3Label, S(34));
+            pathRow(y4, m_tab4Wnd, m_statusArtist3, ID_ARTIST3_FILE, ID_ARTIST3_BROWSE);
+            if (m_artistFieldLabel) SetWindowPos(m_artistFieldLabel, nullptr, margin, y4, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE);
+            y4 += S(22);
+            const int radioW = (std::max)(S(120), fullW2 - S(8));
+            if (m_artistFieldCountry) SetWindowPos(m_artistFieldCountry, nullptr, margin + S(8), y4, radioW, S(22), SWP_NOZORDER | SWP_NOACTIVATE);
+            y4 += S(26);
+            if (m_artistFieldArea) SetWindowPos(m_artistFieldArea, nullptr, margin + S(8), y4, radioW, S(22), SWP_NOZORDER | SWP_NOACTIVATE);
+            y4 += S(26);
+            if (m_orderLabel) SetWindowPos(m_orderLabel, nullptr, margin, y4, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE);
+            y4 += S(24);
+            if (m_orderWorld) SetWindowPos(m_orderWorld, nullptr, margin + S(8), y4, radioW, S(22), SWP_NOZORDER | SWP_NOACTIVATE);
+            y4 += S(26);
+            if (m_orderFlat) SetWindowPos(m_orderFlat, nullptr, margin + S(8), y4, radioW, S(22), SWP_NOZORDER | SWP_NOACTIVATE);
+            y4 += S(26);
+            if (m_orderMb) SetWindowPos(m_orderMb, nullptr, margin + S(8), y4, radioW, S(22), SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         void updateStatus() {
             if (!m_wnd) return;
             struct Item { int edit; int status; bool folder; const char* defaultName; int location; };
-            static const Item items[3] = {
-                { ID_FLAG_DIR, ID_STATUS_FLAG, true, "flags", kLocComponent },
+            static const Item items[7] = {
+                { ID_FLAG_DIR, ID_STATUS_FLAG, true, "flags", kLocProfileData },
                 { ID_ARTIST2_FILE, ID_STATUS_ARTIST2, false, "worldMap.json", kLocJsData },
                 { ID_ARTIST_FILE, ID_STATUS_ARTIST, false, "country_codes.json", kLocJSplitterPackage },
+                { ID_COUNTRIES_FILE, ID_STATUS_COUNTRIES, false, "countries.txt", kLocProfileData },
+                { ID_REGIONS_FILE, ID_STATUS_REGIONS, false, "regions.txt", kLocProfileData },
+                { ID_ARTIST3_FILE, ID_STATUS_ARTIST3, false, "artists_country.json", kLocMusicBrainz },
+                { ID_ALIASES_FILE, ID_STATUS_ALIASES, false, "aliases.txt", kLocProfileData },
             };
-            for (int i = 0; i < 3; ++i) {
+            for (int i = 0; i < 7; ++i) {
                 const std::string text = trim(readEdit(items[i].edit).c_str());
                 const fs::path p = text.empty() ? defaultTablePath(items[i].defaultName, items[i].location) : expandPath(text);
                 std::error_code ec;
@@ -3054,17 +3428,18 @@ namespace {
             dlg->Release();
         }
 
-        void browseForArtistFile(int editId) const {
+        void browseForArtistFile(int editId, bool textFile = false) const {
             IFileOpenDialog* dlg = nullptr;
             if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&dlg))) || !dlg)
                 return;
             DWORD opts = 0;
             dlg->GetOptions(&opts);
             dlg->SetOptions(opts | FOS_FORCEFILESYSTEM | FOS_FILEMUSTEXIST | FOS_PATHMUSTEXIST);
-            dlg->SetTitle(L"Select artist table (JSON)");
-            const COMDLG_FILTERSPEC filters[] = { { L"JSON files (*.json)", L"*.json" }, { L"All files (*.*)", L"*.*" } };
-            dlg->SetFileTypes(2, filters);
-            dlg->SetDefaultExtension(L"json");
+            const COMDLG_FILTERSPEC jsonFilters[] = { { L"JSON files (*.json)", L"*.json" }, { L"All files (*.*)", L"*.*" } };
+            const COMDLG_FILTERSPEC textFilters[] = { { L"Text files (*.txt)", L"*.txt" }, { L"All files (*.*)", L"*.*" } };
+            dlg->SetTitle(textFile ? L"Select data file (text)" : L"Select artist table (JSON)");
+            dlg->SetFileTypes(2, textFile ? textFilters : jsonFilters);
+            dlg->SetDefaultExtension(textFile ? L"txt" : L"json");
 
             const std::string current = trim(readEdit(editId).c_str());
             if (!current.empty()) {
@@ -3094,15 +3469,25 @@ namespace {
         }
 
         void setOrder(int value) const {
-            if (control(ID_ORDER_WORLD)) SendMessageW(control(ID_ORDER_WORLD), BM_SETCHECK,
-                value == 0 ? BST_CHECKED : BST_UNCHECKED, 0);
-            if (control(ID_ORDER_FLAT)) SendMessageW(control(ID_ORDER_FLAT), BM_SETCHECK,
-                value == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
+            const int ids[3] = { ID_ORDER_WORLD, ID_ORDER_FLAT, ID_ORDER_MB };
+            for (int i = 0; i < 3; ++i)
+                if (control(ids[i])) SendMessageW(control(ids[i]), BM_SETCHECK, value == i ? BST_CHECKED : BST_UNCHECKED, 0);
         }
 
+        void setArtistFieldSelection(int value) const {
+            if (control(ID_ARTIST_FIELD_COUNTRY)) SendMessageW(control(ID_ARTIST_FIELD_COUNTRY), BM_SETCHECK, value == 0 ? BST_CHECKED : BST_UNCHECKED, 0);
+            if (control(ID_ARTIST_FIELD_AREA)) SendMessageW(control(ID_ARTIST_FIELD_AREA), BM_SETCHECK, value == 1 ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+
+        int artistFieldSelection() const {
+            return control(ID_ARTIST_FIELD_AREA) && SendMessageW(control(ID_ARTIST_FIELD_AREA), BM_GETCHECK, 0, 0) == BST_CHECKED ? 1 : 0;
+        }
+
+        // 0 = worldMap.json first, 1 = country_codes.json first, 2 = MusicBrainz artists_country.json first.
         int orderSelection() const {
-            return control(ID_ORDER_FLAT) &&
-                SendMessageW(control(ID_ORDER_FLAT), BM_GETCHECK, 0, 0) == BST_CHECKED ? 1 : 0;
+            if (control(ID_ORDER_MB) && SendMessageW(control(ID_ORDER_MB), BM_GETCHECK, 0, 0) == BST_CHECKED) return 2;
+            if (control(ID_ORDER_FLAT) && SendMessageW(control(ID_ORDER_FLAT), BM_GETCHECK, 0, 0) == BST_CHECKED) return 1;
+            return 0;
         }
 
         static int scriptIndex(int id) {
@@ -3111,9 +3496,30 @@ namespace {
             return -1;
         }
         // Script boxes show the compiled (flattened) form; the real, possibly multi-line text is kept in m_full.
+        // 0..4 for the five path boxes (flag folder, worldMap.json, country_codes.json, countries.txt, regions.txt).
+        static int pathIndex(int id) {
+            switch (id) {
+            case ID_FLAG_DIR: return 0;
+            case ID_ARTIST2_FILE: return 1;
+            case ID_ARTIST_FILE: return 2;
+            case ID_COUNTRIES_FILE: return 3;
+            case ID_REGIONS_FILE: return 4;
+            case ID_ARTIST3_FILE: return 5;
+            case ID_ALIASES_FILE: return 6;
+            default: return -1;
+            }
+        }
+
         std::string readEdit(int id) const {
             const int idx = scriptIndex(id);
             if (idx >= 0) return m_full[idx];
+            const int pi = pathIndex(id);
+            if (pi >= 0) {
+                // A default location that was only displayed in the box is not a setting: it counts as empty.
+                const std::string raw = rawEditText(id);
+                if (!m_autoFill[pi].empty() && raw == m_autoFill[pi]) return std::string();
+                return raw;
+            }
             return rawEditText(id);
         }
         std::string rawEditText(int id) const {
@@ -3162,6 +3568,35 @@ namespace {
             cfg = value.c_str();
         }
 
+        // Shows the default location in every empty path box whose default exists (the box then still
+        // counts as empty, see readEdit, so Apply keeps the setting at "default").
+        void fillDefaultPaths() {
+            struct Item { int edit; bool folder; const char* name; int location; };
+            static const Item items[7] = {
+                { ID_FLAG_DIR, true, "flags", kLocProfileData },
+                { ID_ARTIST2_FILE, false, "worldMap.json", kLocJsData },
+                { ID_ARTIST_FILE, false, "country_codes.json", kLocJSplitterPackage },
+                { ID_COUNTRIES_FILE, false, "countries.txt", kLocProfileData },
+                { ID_REGIONS_FILE, false, "regions.txt", kLocProfileData },
+                { ID_ARTIST3_FILE, false, "artists_country.json", kLocMusicBrainz },
+                { ID_ALIASES_FILE, false, "aliases.txt", kLocProfileData },
+            };
+            for (int i = 0; i < 7; ++i) {
+                const std::string raw = rawEditText(items[i].edit);
+                const bool wasAuto = !raw.empty() && raw == m_autoFill[i];
+                if (!raw.empty() && !wasAuto) { m_autoFill[i].clear(); continue; }   // the user's own path
+                m_autoFill[i].clear();
+                const fs::path path = defaultTablePath(items[i].name, items[i].location);
+                std::error_code ec;
+                const bool exists = items[i].folder ? fs::is_directory(path, ec) : fs::is_regular_file(path, ec);
+                if (exists) {
+                    m_autoFill[i] = toUtf8(path);
+                    setEdit(items[i].edit, m_autoFill[i].c_str());
+                }
+                else if (wasAuto) setEdit(items[i].edit, "");
+            }
+        }
+
         void loadValues(bool defaults) {
             if (defaults) { reset(); return; }
             setEdit(ID_SOURCE1, g_cfgSource1.get());
@@ -3177,22 +3612,29 @@ namespace {
             setEdit(ID_FLAG_DIR, g_cfgDir.get());
             setEdit(ID_ARTIST_FILE, g_cfgArtistFile.get());
             setEdit(ID_ARTIST2_FILE, g_cfgArtistFile2.get());
-            setOrder(g_cfgTableOrder.get_value() == 1 ? 1 : 0);
+            setEdit(ID_COUNTRIES_FILE, g_cfgCountriesFile.get());
+            setEdit(ID_REGIONS_FILE, g_cfgRegionsFile.get());
+            setEdit(ID_ARTIST3_FILE, g_cfgArtistFile3.get());
+            setEdit(ID_ALIASES_FILE, g_cfgAliasesFile.get());
+            setOrder((std::min)(2, (std::max)(0, (int)g_cfgTableOrder.get_value())));
+            setArtistFieldSelection((int)g_cfgArtistAreaMode.get_value() == 1 ? 1 : 0);
             setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, cleanSuffix(trim(g_cfgPrefix2.get()), 1).c_str());
             setEdit(ID_PREFIX3, cleanSuffix(trim(g_cfgPrefix3.get()), 2).c_str());
             setEdit(ID_PREFIX4, cleanSuffix(trim(g_cfgPrefix4.get()), 3).c_str());
             setEdit(ID_PREFIX5, cleanSuffix(trim(g_cfgPrefix5.get()), 4).c_str());
+            fillDefaultPaths();
             captureOriginals();
         }
 
         void captureOriginals() {
             for (int id : kEditIds) m_original[id] = readEdit(id);
             m_originalOrder = orderSelection();
+            m_originalArtistField = artistFieldSelection();
         }
 
         bool hasChanges() const {
-            if (orderSelection() != m_originalOrder) return true;
+            if (orderSelection() != m_originalOrder || artistFieldSelection() != m_originalArtistField) return true;
             for (int id : kEditIds) {
                 const auto it = m_original.find(id);
                 if (it == m_original.end() || it->second != readEdit(id)) return true;
@@ -3204,6 +3646,7 @@ namespace {
         HWND m_tabWnd;
         HWND m_tab1Wnd;
         HWND m_tab2Wnd;
+        HWND m_tab4Wnd;                     // "Artist tables" tab
         HWND m_tab3Wnd;                     // "Fields" tab: copyable list of all fields
         HWND m_fieldList, m_fieldHint, m_copyBtn;
         HWND m_fieldNote = nullptr;               // note above the list on the Fields tab
@@ -3211,29 +3654,33 @@ namespace {
         std::vector<std::wstring> m_fieldTexts;   // field text of every list row
         bool m_ready;
         int m_originalOrder;
+        int m_originalArtistField;
         HWND m_note;
         HWND m_caption[5][3];   // per source: suffix / titleformat / fallback captions
         HFONT m_boldFont;
         HWND m_editBtn[10];                 // "..." buttons: slot 0-4 titleformat, 5-9 fallback
         mutable std::string m_full[10];     // full (multi-line) text of the ten scripts
         mutable bool m_settingScript;
+        std::string m_autoFill[7];          // default locations currently shown in the path boxes
         HWND m_previewLabel, m_previewBox;   // Sources tab
         HWND m_importBtn, m_exportBtn;       // Folders tab
         std::string m_lastPreview, m_lastPreviewLabel;
-        HWND m_flagLabel, m_artistLabel, m_artist2Label;
-        HWND m_orderLabel, m_orderWorld, m_orderFlat;
-        HWND m_statusFlag, m_statusArtist, m_statusArtist2;
+        HWND m_flagLabel, m_artistLabel, m_artist2Label, m_countriesLabel, m_regionsLabel, m_artist3Label, m_aliasesLabel;
+        HWND m_orderLabel, m_orderWorld, m_orderFlat, m_orderMb;
+        HWND m_artistFieldLabel, m_artistFieldCountry, m_artistFieldArea;
+        HWND m_statusFlag, m_statusArtist, m_statusArtist2, m_statusCountries, m_statusRegions, m_statusArtist3, m_statusAliases;
         HWND m_rowLabel[5];
         HFONT m_statusFont;
         HFONT m_uiFont = nullptr;             // font of the host preferences dialog, DPI-matched
         UINT m_fontDpi = 0;
         HWND m_parent = nullptr;
         HBRUSH m_brDark;
-        COLORREF m_statusColor[3];
+        COLORREF m_statusColor[7];   // flag folder, worldMap.json, country_codes.json, countries.txt, regions.txt
         fb2k::CCoreDarkModeHooks m_darkMode;
         fb2k::CCoreDarkModeHooks m_tab1DarkMode;
         fb2k::CCoreDarkModeHooks m_tab2DarkMode;
         fb2k::CCoreDarkModeHooks m_tab3DarkMode;
+        fb2k::CCoreDarkModeHooks m_tab4DarkMode;
         preferences_page_callback::ptr m_callback;
         std::unordered_map<int, std::string> m_original;
     };

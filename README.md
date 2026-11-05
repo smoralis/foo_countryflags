@@ -35,10 +35,11 @@ If a part is not a recognised country, it is skipped. If *no* part is recognised
 
 ### Source suffixes
 
-Open **Preferences > Tools > Country Flags** to configure the component. The page has three tabs:
+Open **Preferences > Tools > Country Flags** to configure the component. The page has four tabs:
 
 - **Sources**: one block per source, five blocks stacked on the page (no scrolling). Each block has three rows: the source name (**Source 1** to **Source 5**) with its **Suffix** box, then the **Titleformat** string, then the optional **Fallback** string (see [fallback scripts](#fallback-scripts)). The **...** button next to each script opens a larger, resizable editor for [long scripts](#long-scripts). A one-line note below the last source reminds you that changing a suffix asks to restart foobar2000 when you press Apply. Below it, the **Preview** box shows, for the selected playlist item (or the playing track when nothing is selected), what each source's script returns and which countries that gives. It evaluates the scripts as they are on the page, applied or not, and follows the selection automatically.
-- **Folders**: the flag image folder and the two artist tables, each with a Browse button and a found / not found marker (see [Paths](#paths-and-markers)), plus the choice of which artist table wins. The **Import...** and **Export...** buttons at the bottom of this tab are described in [Import and export](#import-and-export-of-settings).
+- **Folders**: the flag image folder, `countries.txt`, `regions.txt` and `aliases.txt`, each with a Browse button and a found / not found marker (see [Paths](#paths-and-markers)), and below them the **Import...** and **Export...** buttons described in [Import and export](#import-and-export-of-settings).
+- **Artist tables**: the three artist tables (`worldMap.json`, `country_codes.json` and the MusicBrainz `artists_country.json`), each with a Browse button and a marker, and the radio buttons that choose which table is asked first (see [Artist tables](#artist-tables)). The MusicBrainz table also has two radio buttons, to choose whether artist countries are read from `country` (default) or `area.iso-3166-1-codes`.
 - **Fields**: a list of every title-formatting field the component provides, for each source (one row per field, with its source and a short description). The notes above the list explain the naming: Source 1 uses the fixed fields `%countryflag_emoji%`, `%countryflag_path%`, ..., Sources 2-5 use `%countryflag_<suffix>_emoji%` etc. (enter only the suffix, not `countryflag_`), and the fallback script runs only when the script returns no country, its result (an artist name) being looked up in the artist tables on the Folders tab. The list follows the suffixes currently typed on the Sources tab, so the names are right as soon as you change a suffix (a changed suffix is valid in foobar2000 after Apply and a restart). It also contains `%countryflag_lookup%` and the two debug fields (`argument`, `fallbackargument`) of each source.
   - **Copying fields:** select one or more rows and press **Ctrl+C** (**Ctrl+A** selects all), double-click a row, or press the **Copy** button. The field text (for example `%countryflag_artist_iso2%`) of every selected row is put on the clipboard, one per line, ready to paste into a title-formatting string
 
@@ -51,7 +52,7 @@ Open **Preferences > Tools > Country Flags** to configure the component. The pag
 
 ### Import and export of settings
 
-The **Import...** and **Export...** buttons on the **Folders** tab save and load all settings of the page (the ten scripts, the four suffixes, the three paths and the artist table order) as a text file with the extension `.cfsettings` (UTF-8, one `key=value` line per setting, line breaks inside scripts stored as `\n`).
+The **Import...** and **Export...** buttons on the **Folders** tab save and load all settings of the page (the ten scripts, the four suffixes, the seven paths (flag folder, `countries.txt`, `regions.txt`, `aliases.txt` and the three artist tables), the artist table order and the MusicBrainz artist country source) as a text file with the extension `.cfsettings` (UTF-8, one `key=value` line per setting, line breaks inside scripts stored as `\n`).
 
 - **Export** writes what is on the page now, including changes that have not been applied yet.
 - **Import** asks for confirmation, then loads the file into the page. Nothing takes effect until you press **Apply**, so you can still look at the result (and in the **Fields** tab and the preview) or press **Cancel**. Keys that are missing from the file leave the current value unchanged; a file that is not a Country Flags settings file is rejected.
@@ -96,32 +97,53 @@ Before a script is compiled, the component removes whole-line `//` comments, str
 
 ### Artist tables
 
-Two optional JSON files map artist names to countries, so tracks without a country tag can still get a flag. When an artist is in both files, the table chosen by the radio buttons at the bottom of the **Folders** tab wins; the other one is only used for artists the first does not contain. The default is **`worldMap.json` first**, because it can be corrected (for example by clicking on the map), while a generated table such as `country_codes.json` can only be corrected by editing the file. The choice applies right after Apply.
+Three optional JSON files map artist names to countries, so tracks without a country tag can still get a flag. When an artist is in several files, the table chosen by the radio buttons on the **Artist tables** tab is asked first and the other two only for artists it does not contain (the remaining order is `worldMap.json`, `country_codes.json`, `artists_country.json`). The options are **`worldMap.json` first** (the default, because it can be corrected, for example by clicking on the map), **`country_codes.json` first** and **`artists_country.json` (MusicBrainz) first**. The choice applies right after Apply.
+
+The MusicBrainz table has two additional radio buttons, displayed on separate rows:
+
+- **`country`** (default): reads the artist's `country` property.
+- **`area.iso-3166-1-codes`**: reads the first ISO 3166-1 code in the artist's `area.iso-3166-1-codes` array.
+
+The selected property is used for both artist names and aliases. The two modes are independent: if the selected property does not contain a usable country code, the component does not fall back to the other property.
 
 | File | Format |
 |---|---|
 | `worldMap.json` | array: `[{"artist": "Abba", "val": ["Stockholm", "Sweden"]}]`, last item of `val` is the country |
 | `country_codes.json` | flat object: `{"abba": "SE", "aftermath": "US-NJ"}` |
+| `artists_country.json` | MusicBrainz artist database, `{"<mbid>": {"name": "Asking Alexandria", "country": "GB", "area": {"iso-3166-1-codes": ["GB"]}, "aliases": [{"name": "..."}], ...}}` |
 
-- **Location:** by default `worldMap.json` is read from `profile\js_data\worldMap.json` (inside the foobar2000 profile folder) and, if it is not there, from next to the DLL. `country_codes.json` is read from next to the DLL. To keep them elsewhere set the path of each table in preferences (see [Paths](#paths-and-markers)). A changed path takes effect right after Apply.
+- **Location:** by default `worldMap.json` is read from `profile\js_data\worldMap.json` (inside the foobar2000 profile folder) if it exists, otherwise from the [data folder](#data-folder). `country_codes.json` is read from the JSplitter package folder (`profile\foo_uie_jsplitter\package_data\{BA9557CE-7B4B-4E0E-9373-99F511E81252}\`) if it exists there, otherwise from the data folder. The MusicBrainz `artists_country.json` file is read from `profile\foo_musicbrainz_db\repository\artists\artists_country.json` if it exists, otherwise from the data folder. To keep them elsewhere set the path of each table in preferences (see [Paths](#paths-and-markers)). A changed path takes effect right after Apply.
 - Keys are matched case-insensitively (including accented letters) with surrounding spaces ignored. `The Cult` also matches a `cult, the` key and the other way round.
 - `worldMap.json`: the last item of `val` is the country and can be a name, ISO2 or ISO3 code (`United States`, `US`, `USA`); other items (city, region) and other keys are ignored. Entries whose last item is not a recognised country are skipped. If an artist appears more than once, the **last** entry wins.
 - `country_codes.json`: values may be an ISO2/ISO3 code or a country name. A region suffix such as `US-NJ` is accepted and ignored, and `XE` means Europe. Unknown codes (for example `XG`, `YU`) are skipped unless you add them to `countries.txt`. If a key appears more than once, the last one wins.
-- Both files are UTF-8 with or without BOM, and are re-read automatically within a few seconds of being saved; no restart is needed. A missing file simply contributes nothing; an invalid file keeps the previously loaded data.
+- All files are UTF-8 with or without BOM, and are re-read automatically within a few seconds of being saved (`artists_country.json`: within a minute); no restart is needed. A missing file simply contributes nothing; an invalid file keeps the previously loaded data.
+- `artists_country.json` (default location: `profile\foo_musicbrainz_db\repository\artists\artists_country.json` if it exists, otherwise the [data folder](#data-folder)) is the artist cache of the foo_musicbrainz_db component. Each entry's `name` and every alias `name` is matched (so spelling variants resolve too). The country is taken from the property selected in preferences: either `country`, or the first `area.iso-3166-1-codes` value.
 - **Streams:** for the track that is playing, the artist from the stream's dynamic metadata (for example ICY `StreamTitle` on internet radio) is searched first by `%countryflag_lookup%`, and updates when the stream's track changes.
-- `%countryflag_lookup%` returns the ISO2 code(s) of the track's artists: every value of the `artist` tag, or `album artist` when none is found.
+- `%countryflag_lookup%` returns the ISO2 code(s) of the track's artists: every value of the `artist` tag, or `album artist` when none is found. Multi-value tags are supported in both forms: several values of the tag, and one value that lists several artists (`Artist1; Artist2`, `Artist1 & Artist2`, `Artist1, Artist2`, ...). A value is looked up as a whole first, so a name such as `Tyler, The Creator` is found if it is in a table; only when that fails it is split at ` & `, ` and `, ` versus `, ` vs. `, ` vs `, ` + `, `, `, `;`, ` / ` and ` x `, and every part found adds its country (duplicates are removed, results are separated by `; `).
 
 ### Paths and markers
 
-All three path settings (flag folder and both artist tables) accept:
+All path settings accept:
 
 - `%fb2k_profile_path%`: the foobar2000 profile folder, e.g. `%fb2k_profile_path%\foo_uie_jsplitter\package_data\{GUID}\country_codes.json`. The same setting then works for portable and non-portable installs and for any username.
-- `%fb2k_component_path%`: the folder of this component's DLL. `%fb2k_path%`: the foobar2000 program folder.
+- `%fb2k_path%`: the foobar2000 program folder.
 - Any Windows environment variable such as `%APPDATA%`.
 - Relative paths: tried against the foobar2000 program folder first (as before, so an existing `profile\...` setting keeps working on portable installs), then against the profile folder.
 - **Browse** writes a path inside the profile folder back as `%fb2k_profile_path%\...` automatically.
 
-A marker left of each path box shows whether the entered file or folder exists: a green ✓ when it does, a red ✗ when it does not. An empty box checks the default location (`profile\js_data\worldMap.json`, then next to the DLL, for `worldMap.json`; next to the DLL for the other files); a grey ✗ means that default is missing too (fine if you do not use that file). The marker only checks that the file exists, not that its content is valid.
+A marker left of each path box shows whether the entered file or folder exists: a green ✓ when it does, a red ✗ when it does not. An empty box checks the default location (for the flag folder, `countries.txt` and `regions.txt`: the [data folder](#data-folder); for `worldMap.json`: `profile\js_data\worldMap.json`, then the data folder; for `country_codes.json`: the JSplitter package folder, then the data folder; for `artists_country.json`: `profile\foo_musicbrainz_db\repository\artists\artists_country.json`, then the data folder); a grey ✗ means that default is missing too (fine if you do not use that file). When the default exists, its full path is shown in the box when the page opens; the box still counts as empty, so pressing **Apply** keeps the setting at "default" and exported settings leave it empty. Type a path or use **Browse** to override it. The marker only checks that the file exists, not that its content is valid.
+
+### Data folder
+
+The default home for the component's own data is `%fb2k_profile_path%\foo_countryflags_data`, that is the folder `foo_countryflags_data` inside the foobar2000 profile folder. The component creates the empty folder at startup if it does not exist (not the `flags` subfolder inside it). It may contain:
+
+- `flags\`: the flag images (`gr.png`, `us.png`, ...).
+- `countries.txt`: optional country list overrides.
+- `regions.txt`: optional cultural region overrides.
+- `aliases.txt`: optional user aliases for country names (see [Built-in aliases](#built-in-aliases)).
+- `worldMap.json`, `country_codes.json` and `artists_country.json`: the artist tables, when they are not in their own default locations (see [Artist tables](#artist-tables)).
+
+The component never reads data files from its own (component) folder. Because the data folder is in the profile, it survives component updates and is shared by the 32-bit and 64-bit builds. A path entered on the **Folders** tab always wins over the default. `countries.txt`, `regions.txt` and `aliases.txt` are read once at startup, so changing their location on the **Folders** tab asks to restart foobar2000 when you press **Apply**.
 
 ### Cultural regions
 
@@ -143,7 +165,7 @@ A marker left of each path box shows whether the entered file or folder exists: 
 - The built-in table is the (revised) "cultural regions" table of the Music Graph country descriptors, using ISO 3166-1 alpha-3 codes. Its groupings apply as given: for example `Egypt` is `Africa` / `Maghreb`, `Turkey` is `Mashriq` / `Anatolia`, and `South Korea` is `Asia` / `East Asia`.
 - **Russia belongs to two regions**: `region` is `Asia; Europe` and `subregion` is `North Asia; Eastern Europe`, so `%countryflag_subregion% HAS Eastern Europe` and `HAS North Asia` both match Russian artists, while `IS Eastern Europe` does not (use `HAS`).
 - Europe (`EU`/`XE`) has the region `Europe` and no subregion; Worldwide has neither. `ANT` (Netherlands Antilles) is in the table but not in the built-in country list, so it is ignored.
-- **Override or extend it** with an optional `regions.txt` next to the DLL, one `ISO|Region|Subregion` per line (ISO2 or ISO3 code, `#` starts a comment, the file is UTF-8). The first line for a country replaces its built-in entries and further lines for the same country add more regions; a line with an empty region and subregion removes the country's regions. Example:
+- **Override or extend it** with an optional `regions.txt` (in the [data folder](#data-folder), or at the path set on the **Folders** tab), one `ISO|Region|Subregion` per line (ISO2 or ISO3 code, `#` starts a comment, the file is UTF-8). The first line for a country replaces its built-in entries and further lines for the same country add more regions; a line with an empty region and subregion removes the country's regions. Example:
 
 ```
 # Turkey: replace the built-in entry, then add a second region
@@ -153,7 +175,7 @@ TUR|Europe|Southern Europe
 ATA||
 ```
 
-- `regions.txt` is read once at startup, like the optional `countries.txt`; restart foobar2000 after editing it.
+- `regions.txt` is read once at startup, like the optional `countries.txt`; restart foobar2000 after editing it or changing its location.
 
 Built-in regions and subregions:
 
@@ -191,6 +213,17 @@ Built-in regions and subregions:
 ### Built-in aliases
 
 These alternative names are built in and are matched case-insensitively, in addition to the names of the built-in country list. Add more with a [`countries.txt`](#data-files) override file: a line `US|USA|America` makes `America` the name of the United States and keeps `United States` working as an alias. To add an alias without renaming, put its line first and the line with the name you want to keep after it (the last line for an ISO2 code sets the displayed name).
+
+The simplest way to add your own aliases is the optional **`aliases.txt`** file, which is meant for exactly this. Each line is `alias|target`, where the target is an ISO2 code, an ISO3 code or a country name; empty lines and lines starting with `#` are ignored. Aliases are matched case-insensitively and override the built-in aliases. A line whose target is not recognised is skipped.
+
+```
+# my own aliases
+united kingdom of great britain|GB
+britain|GBR
+nippon|Japan
+```
+
+The default location is the [data folder](#data-folder) (`%fb2k_profile_path%\foo_countryflags_data\aliases.txt`) or the path set on the **Folders** tab. The file is read once at startup, so changing it or its location needs a restart of foobar2000 (changing the location asks for it when you press **Apply**).
 
 | Alias | Resolves to | `iso2` |
 |---|---|---|
@@ -231,11 +264,7 @@ These non-ISO values are built in, so they work without any `countries.txt` (an 
 
 1. Install `foo_countryflags.fb2k-component` via Preferences > Components > Install, or double-click it.
 2. Restart foobar2000.
-3. Make sure the optional `countries.txt`, `worldMap.json` / `country_codes.json` and a `flags` folder containing PNG images named by lowercase ISO2 code (`gr.png`, `us.png`, ...) sit next to the DLL:
-   - 64-bit foobar2000: `user-components-x64\foo_countryflags\`
-   - 32-bit foobar2000: `user-components\foo_countryflags\`
-
-   The component looks for these files relative to its own DLL, so each architecture needs its own copy (the package below already includes both). The country list is built into the DLL, so no data file is required. If you use a custom flag folder in preferences, nothing has to sit next to the DLL except the optional `countries.txt`, `country_codes.json` and `worldMap.json` (the last two unless you set their locations in preferences).
+3. Put the optional data into the [data folder](#data-folder) `%fb2k_profile_path%\foo_countryflags_data` (the component creates the empty folder at the first start): a `flags` folder containing PNG images named by lowercase ISO2 code (`gr.png`, `us.png`, ...) and, if you need them, `countries.txt`, `regions.txt`, `worldMap.json` and `country_codes.json`. The country list is built into the DLL, so no data file is required. The data folder is shared by the 32-bit and 64-bit builds; locations set on the **Folders** tab replace the defaults.
 
 ## Usage examples
 
@@ -262,11 +291,13 @@ var img = path ? gdi.Image(path) : null;
 ## Data files
 
 - `*.cfsettings`: settings files written by **Export...** on the Folders tab (see [Import and export](#import-and-export-of-settings)); you choose where they are saved.
-- `regions.txt`: optional, overrides/extends the built-in [cultural regions](#cultural-regions); not included in the zip.
-- `countries.txt` (optional): the country list is **built into the component** (ISO 3166-1, plus Kosovo using the user-assigned code `XKX`). If this file exists next to the DLL it is read at startup as an override: one country per line in the format `ISO2|ISO3|Name`. A line for an ISO2 code that is already built in replaces its name and ISO3 code (the old name and ISO3 code keep working as aliases); a line with a new code adds a country. Restart foobar2000 after editing it. Back it up before updating the component, as component updates may replace the file. An unchanged copy of the full list has no effect, so you can delete it and keep only your own lines.
-- `country_codes.json`: optional artist table (default location: `profile\foo_uie_jsplitter\package_data\{BA9557CE-7B4B-4E0E-9373-99F511E81252}\country_codes.json`, otherwise next to the DLL)(see [Artist tables](#artist-tables));
-- `worldMap.json`: optional artist table (default location: `profile\js_data\worldMap.json`, otherwise next to the DLL) (see [Artist tables](#artist-tables)); by default it takes precedence over `country_codes.json`; 
-- `flags\*.png`: not bundled. [flag-icons](https://github.com/lipis/flag-icons) (MIT) is one source; export its SVGs to PNG and keep its license file.
+- `aliases.txt`: optional, your own aliases for country names, lines `alias|target` (default location: the [data folder](#data-folder)); not included in the zip.
+- `regions.txt`: optional, overrides/extends the built-in [cultural regions](#cultural-regions) (default location: the [data folder](#data-folder)); not included in the zip.
+- `countries.txt` (optional): the country list is **built into the component** (ISO 3166-1, plus Kosovo using the user-assigned code `XKX`). If this file exists in the [data folder](#data-folder) (or at the path set on the **Folders** tab) it is read at startup as an override: one country per line in the format `ISO2|ISO3|Name`. A line for an ISO2 code that is already built in replaces its name and ISO3 code (the old name and ISO3 code keep working as aliases); a line with a new code adds a country. Restart foobar2000 after editing it. An unchanged copy of the full list has no effect, so you can delete it and keep only your own lines.
+- `country_codes.json`: optional artist table (default location: `profile\foo_uie_jsplitter\package_data\{BA9557CE-7B4B-4E0E-9373-99F511E81252}\country_codes.json`, otherwise the [data folder](#data-folder)) (see [Artist tables](#artist-tables));
+- `artists_country.json`: optional artist table from the foo_musicbrainz_db repository (default location: `profile\foo_musicbrainz_db\repository\artists\artists.json`, otherwise the [data folder](#data-folder)) (see [Artist tables](#artist-tables)); not included in the zip.
+- `worldMap.json`: optional artist table (default location: `profile\js_data\worldMap.json`, otherwise the [data folder](#data-folder)) (see [Artist tables](#artist-tables)); by default it takes precedence over `country_codes.json`; 
+- `flags\*.png` (default location: `foo_countryflags_data\flags` in the profile folder): not bundled. [flag-icons](https://github.com/lipis/flag-icons) (MIT) is one source; export its SVGs to PNG and keep its license file.
 
 
 ## Building
