@@ -281,6 +281,9 @@ var path = fb.TitleFormat('%countryflag_path%').Eval(true);
 var img = path ? gdi.Image(path) : null;
 ```
 
+Various useful usage information see https://hydrogenaudio.org/index.php/topic,130116.msg1090139.html#msg1090139 ( provided by https://github.com/regorxxx )
+
+
 ## Notes
 
 - **Emoji on Windows**: the default Windows emoji font shows flag emoji as two letters (e.g. "GR") instead of a flag. `%countryflag_emoji%` only renders real flags with a flag-capable font such as Twemoji Country Flags. For reliable results, use `%countryflag_path%` with PNG images.
