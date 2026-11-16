@@ -29,17 +29,28 @@ If no country can be determined for a source, that source's fields are empty, so
 
 ### Several countries in one value
 
-A script result may list several countries, separated by `,`, `;`, `/` or `+` (for example `US+DE` or `GB, SE`). Each part is looked up separately, duplicates are dropped, and the fields list every country: `emoji` is space-separated (`🇺🇸 🇩🇪`), the other fields are separated by `; `, and `path` lists every flag image that exists.
+A script result may list several countries, separated by `,`, `;`, `/` or `+` (for example `US+DE` or `GB, SE`). Each part is looked up separately, duplicates are dropped (unless [Keep duplicate countries](#keep-duplicate-countries) is on), and the fields list every country: `emoji` is space-separated (`🇺🇸 🇩🇪`), the other fields are separated by `; `, and `path` lists every flag image that exists.
 
 If a part is not a recognised country, it is skipped. If *no* part is recognised, the source counts as having no country and the fallback script runs. For example `US+DE` was not recognised in earlier versions, so the fallback ran and its artist lookup could return a single flag; `+` is now treated as a separator, so both countries are returned. Check `%countryflag_<suffix>_argument%` to see what the script returned, and `%countryflag_<suffix>_fallbackargument%` to see whether the fallback ran.
 
+
+### Keep duplicate countries
+
+By default every list of countries drops repeated entries: a script result such as `US+US` gives one country, and `%countryflag_lookup%` for two US artists gives `US`. Two independent checkboxes on the **Settings** tab (both off by default) turn this off:
+
+- **Keep duplicate countries in the source fields**: a result such as `US+US` or `US, DE, US` keeps every entry in the `emoji`, `path`, `name`, `iso2`, `iso3`, `region` and `subregion` fields (`🇺🇸 🇺🇸`, `United States; United States`, ...). Unrecognised parts are still skipped.
+- **Keep duplicate countries in `%countryflag_lookup%`**: one entry is returned per artist or MBID (`US; US`), which is useful to show one flag per artist.
+
+Each setting is applied together with the other settings and is part of Export and Import (`fields.keep-duplicates` and `lookup.keep-duplicates`).
+
 ### Source suffixes
 
-Open **Preferences > Tools > Country Flags** to configure the component. The page has four tabs:
+Open **Preferences > Tools > Country Flags** to configure the component. The page has five tabs:
 
 - **Sources**: one block per source, five blocks stacked on the page (no scrolling). Each block has three rows: the source name (**Source 1** to **Source 5**) with its **Suffix** box, then the **Titleformat** string, then the optional **Fallback** string (see [fallback scripts](#fallback-scripts)). The **...** button next to each script opens a larger, resizable editor for [long scripts](#long-scripts). A one-line note below the last source reminds you that changing a suffix asks to restart foobar2000 when you press Apply. Below it, the **Preview** box shows, for the selected playlist item (or the playing track when nothing is selected), what each source's script returns and which countries that gives. It evaluates the scripts as they are on the page, applied or not, and follows the selection automatically.
-- **Folders**: the flag image folder, `countries.txt`, `regions.txt` and `aliases.txt`, each with a Browse button and a found / not found marker (see [Paths](#paths-and-markers)), and below them the **Import...** and **Export...** buttons described in [Import and export](#import-and-export-of-settings).
-- **Artist tables**: the three artist tables (`worldMap.json`, `country_codes.json` and the MusicBrainz `artists_country.json`), each with a Browse button and a marker, and the radio buttons that choose which table is asked first (see [Artist tables](#artist-tables)). The MusicBrainz table also has two radio buttons, to choose whether artist countries are read from `country` (default) or `area.iso-3166-1-codes`.
+- **Folders**: the flag image folder, `countries.txt`, `regions.txt` and `aliases.txt`, each with a Browse button and a found / not found marker (see [Paths](#paths-and-markers)).
+- **Artist tables**: the three artist tables (`worldMap.json`, `country_codes.json` and the MusicBrainz `artists_country.json`), each with a Browse button and a marker, and the radio buttons that choose which table is asked first. The MusicBrainz table also has two radio buttons, to choose whether artist countries are read from `country` (default) or `area.iso-3166-1-codes`.
+- **Settings**: two checkboxes, both off by default, **Keep duplicate countries in the source fields** and **Keep duplicate countries in `%countryflag_lookup%`** (see [Keep duplicate countries](#keep-duplicate-countries)), and the **Import...** and **Export...** buttons for all settings (see [Import and export](#import-and-export-of-settings)).
 - **Fields**: a list of every title-formatting field the component provides, for each source (one row per field, with its source and a short description). The notes above the list explain the naming: Source 1 uses the fixed fields `%countryflag_emoji%`, `%countryflag_path%`, ..., Sources 2-5 use `%countryflag_<suffix>_emoji%` etc. (enter only the suffix, not `countryflag_`), and the fallback script runs only when the script returns no country, its result (an artist name) being looked up in the artist tables on the Folders tab. The list follows the suffixes currently typed on the Sources tab, so the names are right as soon as you change a suffix (a changed suffix is valid in foobar2000 after Apply and a restart). It also contains `%countryflag_lookup%` and the two debug fields (`argument`, `fallbackargument`) of each source.
   - **Copying fields:** select one or more rows and press **Ctrl+C** (**Ctrl+A** selects all), double-click a row, or press the **Copy** button. The field text (for example `%countryflag_artist_iso2%`) of every selected row is put on the clipboard, one per line, ready to paste into a title-formatting string
 
@@ -52,7 +63,7 @@ Open **Preferences > Tools > Country Flags** to configure the component. The pag
 
 ### Import and export of settings
 
-The **Import...** and **Export...** buttons on the **Folders** tab save and load all settings of the page (the ten scripts, the four suffixes, the seven paths (flag folder, `countries.txt`, `regions.txt`, `aliases.txt` and the three artist tables), the artist table order and the MusicBrainz artist country source) as a text file with the extension `.cfsettings` (UTF-8, one `key=value` line per setting, line breaks inside scripts stored as `\n`).
+The **Import...** and **Export...** buttons on the **Settings** tab save and load all settings of the page (the ten scripts, the four suffixes, the seven paths (flag folder, `countries.txt`, `regions.txt`, `aliases.txt` and the three artist tables), the artist table order, the MusicBrainz artist country source and the two keep-duplicates checkboxes) as a text file with the extension `.cfsettings` (UTF-8, one `key=value` line per setting, line breaks inside scripts stored as `\n`).
 
 - **Export** writes what is on the page now, including changes that have not been applied yet.
 - **Import** asks for confirmation, then loads the file into the page. Nothing takes effect until you press **Apply**, so you can still look at the result (and in the **Fields** tab and the preview) or press **Cancel**. Keys that are missing from the file leave the current value unchanged; a file that is not a Country Flags settings file is rejected.
@@ -104,7 +115,7 @@ The MusicBrainz table has two additional radio buttons, displayed on separate ro
 - **`country`** (default): reads the artist's `country` property.
 - **`area.iso-3166-1-codes`**: reads the first ISO 3166-1 code in the artist's `area.iso-3166-1-codes` array.
 
-The selected property is used for both artist names and aliases. The two modes are independent: if the selected property does not contain a usable country code, the component does not fall back to the other property.
+The selected property is used for artist names, aliases and MBIDs (every entry is also stored under its MBID, the key of the entry, for the `MUSICBRAINZ_ARTISTID` lookup of `%countryflag_lookup%`). The two modes are independent: if the selected property does not contain a usable country code, the component does not fall back to the other property.
 
 | File | Format |
 |---|---|
@@ -119,7 +130,7 @@ The selected property is used for both artist names and aliases. The two modes a
 - All files are UTF-8 with or without BOM, and are re-read automatically within a few seconds of being saved (`artists_country.json`: within a minute); no restart is needed. A missing file simply contributes nothing; an invalid file keeps the previously loaded data.
 - `artists_country.json` (default location: `profile\foo_musicbrainz_db\repository\artists\artists_country.json` if it exists, otherwise the [data folder](#data-folder)) is the artist cache of the foo_musicbrainz_db component. Each entry's `name` and every alias `name` is matched (so spelling variants resolve too). The country is taken from the property selected in preferences: either `country`, or the first `area.iso-3166-1-codes` value.
 - **Streams:** for the track that is playing, the artist from the stream's dynamic metadata (for example ICY `StreamTitle` on internet radio) is searched first by `%countryflag_lookup%`, and updates when the stream's track changes.
-- `%countryflag_lookup%` returns the ISO2 code(s) of the track's artists: every value of the `artist` tag, or `album artist` when none is found. Multi-value tags are supported in both forms: several values of the tag, and one value that lists several artists (`Artist1; Artist2`, `Artist1 & Artist2`, `Artist1, Artist2`, ...). A value is looked up as a whole first, so a name such as `Tyler, The Creator` is found if it is in a table; only when that fails it is split at ` & `, ` and `, ` versus `, ` vs. `, ` vs `, ` + `, `, `, `;`, ` / ` and ` x `, and every part found adds its country (duplicates are removed, results are separated by `; `).
+- `%countryflag_lookup%` returns the ISO2 code(s) of the track's artists. If the track has a MusicBrainz artist ID in the tag `MUSICBRAINZ_ARTISTID` or `MUSICBRAINZ ARTIST ID` (one or several ids, as several values or separated by `;`, `,` or `/`), the entry with that MBID in `artists_country.json` is used and the artist names are not looked up at all; an id that is not in the file is ignored. Otherwise every value of the `artist` tag is looked up, or `album artist` when none is found. Repeated countries are removed by default (two US artists give `US`); the **Keep duplicate countries in `%countryflag_lookup%`** setting (see [Keep duplicate countries](#keep-duplicate-countries)) keeps one entry per artist instead (`US; US`), which is useful to show one flag per artist. Multi-value tags are supported in both forms: several values of the tag, and one value that lists several artists (`Artist1; Artist2`, `Artist1 & Artist2`, `Artist1, Artist2`, ...). A value is looked up as a whole first, so a name such as `Tyler, The Creator` is found if it is in a table; only when that fails it is split at ` & `, ` and `, ` versus `, ` vs. `, ` vs `, ` + `, `, `, `;`, ` / ` and ` x `, and every part found adds its country (duplicates are removed, results are separated by `; `).
 
 ### Paths and markers
 

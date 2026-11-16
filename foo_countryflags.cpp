@@ -36,7 +36,7 @@
 #pragma comment(lib, "Comctl32.lib")
 #pragma comment(lib, "Comdlg32.lib")
 
-DECLARE_COMPONENT_VERSION("Country Flags", "0.1.8",
+DECLARE_COMPONENT_VERSION("Country Flags", "0.1.9",
     "Maps country codes/names in tags to flags for title formatting.");
 VALIDATE_COMPONENT_FILENAME("foo_countryflags.dll");
 
@@ -62,6 +62,8 @@ namespace {
     const GUID guid_fallback4 = { 0x7f6a1044, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x24 } };
     const GUID guid_fallback5 = { 0x7f6a1045, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x25 } };
     const GUID guid_table_order = { 0x5b2e9a61, 0x0c73, 0x4e18, { 0x8d, 0x4a, 0x92, 0x1e, 0x6f, 0x30, 0xb7, 0xd5 } };
+    const GUID guid_keep_duplicates_fields = { 0x5b2e9a64, 0x0c73, 0x4e18, { 0x8d, 0x4a, 0x92, 0x1e, 0x6f, 0x30, 0xb7, 0xd8 } };
+    const GUID guid_keep_duplicates = { 0x5b2e9a63, 0x0c73, 0x4e18, { 0x8d, 0x4a, 0x92, 0x1e, 0x6f, 0x30, 0xb7, 0xd7 } };
     const GUID guid_artist_country_field = { 0x5b2e9a62, 0x0c73, 0x4e18, { 0x8d, 0x4a, 0x92, 0x1e, 0x6f, 0x30, 0xb7, 0xd6 } };
     const GUID guid_dir = { 0xb46e52be, 0x3476, 0x45b5, { 0x98, 0x4f, 0xff, 0x11, 0xbd, 0x1f, 0x98, 0x8b } };
     const GUID guid_prefix1 = { 0x7f6a1031, 0x2b44, 0x4c9d, { 0x91, 0x31, 0x3e, 0x67, 0x18, 0x22, 0x4a, 0x11 } };
@@ -86,6 +88,8 @@ namespace {
     cfg_string g_cfgFallback5(guid_fallback5, "");
     cfg_string g_cfgDir(guid_dir, "");
     cfg_int g_cfgTableOrder(guid_table_order, 0);
+    cfg_int g_cfgKeepDupLookup(guid_keep_duplicates, 0);          // 1 = %countryflag_lookup% keeps one entry per artist (repeated countries kept)
+    cfg_int g_cfgKeepDupFields(guid_keep_duplicates_fields, 0);   // 1 = the source fields keep repeated countries of a script result
     cfg_int g_cfgArtistAreaMode(guid_artist_country_field, 0); // 0 = country, 1 = area.iso-3166-1-codes
     cfg_string g_cfgArtistFile(guid_artist_file, "");
     cfg_string g_cfgArtistFile2(guid_artist_file2, "");
@@ -1060,7 +1064,7 @@ namespace {
         BufferedFile r(path);
         if (!r.ok()) return false;
         std::vector<std::pair<std::string, std::string>> aliasPairs;   // appended last so real names win over aliases
-        const bool ok = mbObject(r, [&](const std::string&) {
+        const bool ok = mbObject(r, [&](const std::string& mbidKey) {
             if (r.peek() != '{') return mbSkipValue(r);
             std::string name, country;
             std::vector<std::string> areaCodes, aliases;
@@ -1105,6 +1109,12 @@ namespace {
                 ? (areaCodes.empty() ? std::string() : areaCodes.front())
                 : country;
             if (selectedCountry.empty()) return true;
+            {
+                // The entry is also reachable by its MBID (the top-level key), stored as "mbid:<lowercase id>".
+                std::string id = "mbid:";
+                for (char c : mbidKey) id += (c >= 'A' && c <= 'Z') ? (char)(c - 'A' + 'a') : c;
+                pairs.emplace_back(std::move(id), selectedCountry);
+            }
             if (!name.empty()) pairs.emplace_back(name, selectedCountry);
             for (auto& a : aliases) aliasPairs.emplace_back(std::move(a), selectedCountry);
             return true;
@@ -1318,15 +1328,37 @@ namespace {
     // Separators that join several artists in one tag value ("A; B", "A & B", ...).
     const char* const kArtistSeparators[] = { " & ", " and ", " versus ", " vs. ", " vs ", " + ", ", ", ";", " / ", " x " };
 
+    // All MusicBrainz IDs (8-4-4-4-12 hex) found in a tag value, lowercase. A value may hold one id or
+    // several ("id1; id2", "id1/id2").
+    std::vector<std::string> extractMbids(const std::string& value) {
+        std::vector<std::string> ids;
+        auto isHex = [](char c) { return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'); };
+        for (size_t i = 0; i + 36 <= value.size(); ) {
+            bool match = true;
+            for (size_t k = 0; k < 36 && match; ++k) {
+                const char c = value[i + k];
+                match = (k == 8 || k == 13 || k == 18 || k == 23) ? c == '-' : isHex(c);
+            }
+            if (!match) { ++i; continue; }
+            std::string id = value.substr(i, 36);
+            for (char& c : id) if (c >= 'A' && c <= 'F') c = (char)(c - 'A' + 'a');
+            ids.push_back(std::move(id));
+            i += 36;
+        }
+        return ids;
+    }
+
     std::vector<std::string> artistLookupCountries(metadb_handle* h) {
         std::vector<std::string> countries;
         const auto map = artistMap();
         const auto map2 = artistMap2();
         const auto map3 = artistMap3();
         if ((!map || map->empty()) && (!map2 || map2->empty()) && (!map3 || map3->empty())) return countries;
+        const bool keepDuplicates = g_cfgKeepDupLookup.get_value() != 0;
         auto addIso = [&](const std::string* iso) {
-            if (iso && std::find(countries.begin(), countries.end(), *iso) == countries.end())
-                countries.push_back(*iso);
+            if (!iso) return;
+            if (!keepDuplicates && std::find(countries.begin(), countries.end(), *iso) != countries.end()) return;
+            countries.push_back(*iso);
             };
         // A value is looked up as a whole first ("Tyler, The Creator"); when that fails it is split at
         // the usual separators ("Artist1; Artist2") and every part found adds its country.
@@ -1354,6 +1386,21 @@ namespace {
         metadb_info_container::ptr ref;
         if (!h->get_info_ref(ref) || ref.is_empty()) return countries;
         const file_info& info = ref->info();
+
+        // An exact MusicBrainz artist ID in the track's tags beats any name lookup: the entry with that
+        // MBID in artists_country.json is used.
+        if (map3 && !map3->empty()) {
+            for (const char* field : { "MUSICBRAINZ_ARTISTID", "MUSICBRAINZ ARTIST ID" }) {
+                const t_size idx = info.meta_find(field);
+                if (idx == pfc_infinite) continue;
+                const t_size count = info.meta_enum_value_count(idx);
+                for (t_size k = 0; k < count; ++k)
+                    for (const std::string& id : extractMbids(std::string(info.meta_enum_value(idx, k))))
+                        addIso(findArtist(*map3, "mbid:" + id));
+            }
+            if (!countries.empty()) return countries;
+        }
+
         for (const char* field : { "artist", "album artist" }) {
             const t_size idx = info.meta_find(field);
             if (idx == pfc_infinite) continue;
@@ -1546,13 +1593,14 @@ namespace {
     std::vector<std::string> parseCountryList(const std::string& whole) {
         std::vector<std::string> countries;
         if (whole.empty()) return countries;
+        const bool keepDuplicates = g_cfgKeepDupFields.get_value() != 0;
         size_t pos = 0;
         while (pos <= whole.size()) {
             size_t end = whole.find_first_of(",;/+", pos);
             if (end == std::string::npos) end = whole.size();
             const std::string piece = trim(whole.substr(pos, end - pos).c_str());
             const std::string iso = normalize(piece.c_str());
-            if (!iso.empty() && std::find(countries.begin(), countries.end(), iso) == countries.end())
+            if (!iso.empty() && (keepDuplicates || std::find(countries.begin(), countries.end(), iso) == countries.end()))
                 countries.push_back(iso);
             if (end == whole.size()) break;
             pos = end + 1;
@@ -1636,6 +1684,8 @@ namespace {
     constexpr int ID_ORDER_MB = 1043;
     constexpr int ID_ARTIST_FIELD_COUNTRY = 1044;
     constexpr int ID_ARTIST_FIELD_AREA = 1045;
+    constexpr int ID_KEEP_DUP_LOOKUP = 1046;
+    constexpr int ID_KEEP_DUP_FIELDS = 1047;
     constexpr int ID_ALIASES_FILE = 1029;
     constexpr int ID_ALIASES_BROWSE = 1030;
     constexpr int ID_STATUS_ALIASES = 1036;
@@ -1723,6 +1773,43 @@ namespace {
         else if (SystemParametersInfoW(SPI_GETNONCLIENTMETRICS, sizeof(ncm), &ncm, 0)) lf = ncm.lfMessageFont;
         else GetObjectW(GetStockObject(DEFAULT_GUI_FONT), sizeof(lf), &lf);
         return CreateFontIndirectW(&lf);
+    }
+
+    // Explicit dark colours for static text, edit boxes and list boxes. Relying only on foobar2000's
+    // dark-mode hooks leaves black text on a dark background where they are not fully supported (Wine).
+    constexpr COLORREF kDarkBack = RGB(32, 32, 32);
+    constexpr COLORREF kDarkEditText = RGB(240, 240, 240);
+    constexpr COLORREF kDarkEditBack = RGB(45, 45, 45);
+
+    HBRUSH darkBackBrush() {
+        static HBRUSH brush = CreateSolidBrush(kDarkBack);
+        return brush;
+    }
+
+    HBRUSH darkEditBrush() {
+        static HBRUSH brush = CreateSolidBrush(kDarkEditBack);
+        return brush;
+    }
+
+    // Light text on a dark background, black text on a light one.
+    COLORREF contrastingTextColor(COLORREF background) {
+        const int brightness = (GetRValue(background) * 299 + GetGValue(background) * 587 + GetBValue(background) * 114) / 1000;
+        return brightness < 128 ? RGB(240, 240, 240) : RGB(0, 0, 0);
+    }
+
+    // WM_CTLCOLOREDIT / WM_CTLCOLORLISTBOX: explicit colours in both modes. Returns the brush.
+    LRESULT editControlColors(HDC dc, bool dark) {
+        SetTextColor(dc, dark ? kDarkEditText : GetSysColor(COLOR_WINDOWTEXT));
+        SetBkColor(dc, dark ? kDarkEditBack : GetSysColor(COLOR_WINDOW));
+        return reinterpret_cast<LRESULT>(dark ? darkEditBrush() : GetSysColorBrush(COLOR_WINDOW));
+    }
+
+    // WM_CTLCOLORSTATIC: transparent text on the page background with a contrasting colour.
+    LRESULT staticControlColors(HDC dc, bool dark, HBRUSH darkBrush) {
+        const COLORREF background = dark ? kDarkBack : GetSysColor(COLOR_BTNFACE);
+        SetTextColor(dc, contrastingTextColor(background));
+        SetBkMode(dc, TRANSPARENT);
+        return reinterpret_cast<LRESULT>(dark ? darkBrush : GetSysColorBrush(COLOR_BTNFACE));
     }
 
     // ---- Themed message box (MessageBox does not follow foobar2000's dark mode) ----
@@ -1859,12 +1946,8 @@ namespace {
                 FillRect(reinterpret_cast<HDC>(wp), &rc, dark ? m_brDark : GetSysColorBrush(COLOR_BTNFACE));
                 return 1;
             }
-            case WM_CTLCOLORSTATIC: {
-                HDC dc = reinterpret_cast<HDC>(wp);
-                if (dark) SetTextColor(dc, RGB(240, 240, 240));
-                SetBkMode(dc, TRANSPARENT);
-                return reinterpret_cast<LRESULT>(dark ? m_brDark : GetSysColorBrush(COLOR_BTNFACE));
-            }
+            case WM_CTLCOLORSTATIC:
+                return staticControlColors(reinterpret_cast<HDC>(wp), dark, m_brDark);
             case WM_COMMAND: {
                 int id = LOWORD(wp);
                 if (id == IDCANCEL) id = m_yesNo ? IDNO : IDOK;
@@ -2111,6 +2194,20 @@ namespace {
             SendMessageW(edit, EM_SETSEL, 0, 0);
             return FALSE;   // focus was set explicitly
         }
+        case WM_CTLCOLORDLG: {
+            const bool dark = st && st->dark;
+            if (dark) return reinterpret_cast<INT_PTR>(darkBackBrush());
+            break;
+        }
+        case WM_CTLCOLORSTATIC: {
+            const bool dark = st && st->dark;
+            return static_cast<INT_PTR>(staticControlColors(reinterpret_cast<HDC>(wp), dark, darkBackBrush()));
+        }
+        case WM_CTLCOLOREDIT:
+        case WM_CTLCOLORLISTBOX: {
+            const bool dark = st && st->dark;
+            return static_cast<INT_PTR>(editControlColors(reinterpret_cast<HDC>(wp), dark));
+        }
         case WM_SIZE:
             scriptEditorLayout(dlg);
             return TRUE;
@@ -2184,12 +2281,12 @@ namespace {
     public:
         country_flags_preferences_instance(HWND parent, preferences_page_callback::ptr callback)
             : m_callback(callback), m_wnd(nullptr), m_tabWnd(nullptr), m_tab1Wnd(nullptr), m_tab2Wnd(nullptr), m_tab3Wnd(nullptr), m_tab4Wnd(nullptr), m_fieldList(nullptr), m_fieldHint(nullptr), m_copyBtn(nullptr),
-            m_ready(false), m_originalOrder(0), m_originalArtistField(0),
+            m_ready(false), m_originalOrder(0), m_originalArtistField(0), m_originalKeepDupLookup(0), m_originalKeepDupFields(0),
             m_note(nullptr), m_boldFont(nullptr), m_settingScript(false),
             m_previewLabel(nullptr), m_previewBox(nullptr), m_importBtn(nullptr), m_exportBtn(nullptr),
             m_flagLabel(nullptr), m_artistLabel(nullptr), m_artist2Label(nullptr), m_countriesLabel(nullptr), m_regionsLabel(nullptr), m_artist3Label(nullptr), m_aliasesLabel(nullptr),
             m_orderLabel(nullptr), m_orderWorld(nullptr), m_orderFlat(nullptr), m_orderMb(nullptr),
-            m_artistFieldLabel(nullptr), m_artistFieldCountry(nullptr), m_artistFieldArea(nullptr),
+            m_artistFieldLabel(nullptr), m_artistFieldCountry(nullptr), m_artistFieldArea(nullptr), m_keepDupLookup(nullptr), m_keepDupFields(nullptr), m_tab5Wnd(nullptr),
             m_statusFlag(nullptr), m_statusArtist(nullptr), m_statusArtist2(nullptr), m_statusCountries(nullptr), m_statusRegions(nullptr), m_statusArtist3(nullptr), m_statusAliases(nullptr),
             m_statusFont(nullptr), m_brDark(CreateSolidBrush(RGB(32, 32, 32))) {
 
@@ -2251,8 +2348,10 @@ namespace {
                 TabCtrl_InsertItem(m_tabWnd, 1, &tie);
                 tie.pszText = const_cast<LPWSTR>(L"Artist tables");
                 TabCtrl_InsertItem(m_tabWnd, 2, &tie);
-                tie.pszText = const_cast<LPWSTR>(L"Fields");
+                tie.pszText = const_cast<LPWSTR>(L"Settings");
                 TabCtrl_InsertItem(m_tabWnd, 3, &tie);
+                tie.pszText = const_cast<LPWSTR>(L"Fields");
+                TabCtrl_InsertItem(m_tabWnd, 4, &tie);
 
                 RECT rcTab{};
                 GetClientRect(m_tabWnd, &rcTab);
@@ -2277,9 +2376,14 @@ namespace {
                     WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
                     rcTab.left, rcTab.top, tabW, tabH, m_tabWnd, nullptr, hInstance, this);
                 ShowWindow(m_tab4Wnd, SW_HIDE);
+                m_tab5Wnd = CreateWindowExW(0, L"CountryFlagsTabChildPage", L"",
+                    WS_CHILD | WS_CLIPCHILDREN | WS_CLIPSIBLINGS,
+                    rcTab.left, rcTab.top, tabW, tabH, m_tabWnd, nullptr, hInstance, this);
+                ShowWindow(m_tab5Wnd, SW_HIDE);
                 createTab1Controls();
                 createTab2Controls();
                 createTab3Controls();
+                createTab5Controls();
 
                 loadValues(false);
                 updateStatus();
@@ -2290,6 +2394,7 @@ namespace {
                 m_tab2DarkMode.AddDialogWithControls(m_tab2Wnd);
                 m_tab3DarkMode.AddDialogWithControls(m_tab3Wnd);
                 m_tab4DarkMode.AddDialogWithControls(m_tab4Wnd);
+                m_tab5DarkMode.AddDialogWithControls(m_tab5Wnd);
                 m_ready = true;
 
                 layoutControls(initW, initH);
@@ -2344,6 +2449,8 @@ namespace {
             saveEdit(ID_ALIASES_FILE, g_cfgAliasesFile);
             g_cfgTableOrder = orderSelection();
             g_cfgArtistAreaMode = artistFieldSelection();
+            g_cfgKeepDupLookup = isChecked(ID_KEEP_DUP_LOOKUP);
+            g_cfgKeepDupFields = isChecked(ID_KEEP_DUP_FIELDS);
 
             const int prefixIDs[] = { ID_PREFIX2, ID_PREFIX3, ID_PREFIX4, ID_PREFIX5 };
             for (size_t i = 0; i < 4; ++i) {
@@ -2407,6 +2514,8 @@ namespace {
             fillDefaultPaths();
             setOrder(0);
             setArtistFieldSelection(0);
+            setChecked(ID_KEEP_DUP_LOOKUP, false);
+            setChecked(ID_KEEP_DUP_FIELDS, false);
             setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, "artist");
             setEdit(ID_PREFIX3, "3");
@@ -2425,7 +2534,7 @@ namespace {
                 SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(self));
             }
             if (self) {
-                if (msg == WM_CTLCOLORSTATIC && self->m_wnd) {
+                if ((msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX) && self->m_wnd) {
                     return SendMessageW(self->m_wnd, msg, wp, lp);
                 }
                 if (msg == WM_COMMAND && self->m_wnd) {
@@ -2485,17 +2594,14 @@ namespace {
                     SetBkMode(dc, TRANSPARENT);
                     return reinterpret_cast<INT_PTR>(dark ? m_brDark : GetSysColorBrush(COLOR_BTNFACE));
                 }
-                if (dark) {
-                    SetTextColor(dc, RGB(240, 240, 240));
-                    SetBkMode(dc, TRANSPARENT);
-                    return reinterpret_cast<INT_PTR>(m_brDark);
-                }
-                SetBkMode(dc, TRANSPARENT);
-                return reinterpret_cast<INT_PTR>(GetSysColorBrush(COLOR_BTNFACE));
+                return staticControlColors(dc, dark, m_brDark);
+            }
+            if (msg == WM_CTLCOLOREDIT || msg == WM_CTLCOLORLISTBOX) {
+                return editControlColors(reinterpret_cast<HDC>(wp), dark);
             }
 
             // Forward commands and notifications from child tabs up to main preferences handler
-            if ((wnd == m_tab1Wnd || wnd == m_tab2Wnd || wnd == m_tab3Wnd || wnd == m_tab4Wnd)) {
+            if ((wnd == m_tab1Wnd || wnd == m_tab2Wnd || wnd == m_tab3Wnd || wnd == m_tab4Wnd || wnd == m_tab5Wnd)) {
                 if (msg == WM_SIZE && wnd == m_tab3Wnd) layoutFieldsTab();
                 if ((msg == WM_COMMAND || msg == WM_NOTIFY) && m_wnd) {
                     return SendMessageW(m_wnd, msg, wp, lp);
@@ -2514,8 +2620,9 @@ namespace {
                     ShowWindow(m_tab1Wnd, sel == 0 ? SW_SHOW : SW_HIDE);
                     ShowWindow(m_tab2Wnd, sel == 1 ? SW_SHOW : SW_HIDE);
                     ShowWindow(m_tab4Wnd, sel == 2 ? SW_SHOW : SW_HIDE);
-                    ShowWindow(m_tab3Wnd, sel == 3 ? SW_SHOW : SW_HIDE);
-                    if (sel == 3) { ensureFieldList(); layoutFieldsTab(); refreshFieldList(); }
+                    ShowWindow(m_tab5Wnd, sel == 3 ? SW_SHOW : SW_HIDE);
+                    ShowWindow(m_tab3Wnd, sel == 4 ? SW_SHOW : SW_HIDE);
+                    if (sel == 4) { ensureFieldList(); layoutFieldsTab(); refreshFieldList(); }
                     return 0;
                 }
                 if (nm && nm->idFrom == ID_FIELDLIST) {
@@ -2548,6 +2655,8 @@ namespace {
                 case ID_ORDER_MB:
                 case ID_ARTIST_FIELD_COUNTRY:
                 case ID_ARTIST_FIELD_AREA:
+                case ID_KEEP_DUP_LOOKUP:
+                case ID_KEEP_DUP_FIELDS:
                     if (m_ready && m_callback.is_valid()) m_callback->on_state_changed();
                     return 0;
                 case ID_COPYFIELD: copySelectedFields(); return 0;
@@ -2587,6 +2696,7 @@ namespace {
                 if (m_tab2Wnd) InvalidateRect(m_tab2Wnd, nullptr, TRUE);
                 if (m_tab3Wnd) InvalidateRect(m_tab3Wnd, nullptr, TRUE);
                 if (m_tab4Wnd) InvalidateRect(m_tab4Wnd, nullptr, TRUE);
+                if (m_tab5Wnd) InvalidateRect(m_tab5Wnd, nullptr, TRUE);
                 applyFieldListColors();
             }
             if (msg == WM_TIMER && (wp == kPreviewTimer || wp == kPreviewSoon)) {
@@ -2624,7 +2734,9 @@ namespace {
             if (c) return c;
             c = GetDlgItem(m_tab2Wnd, id);
             if (c) return c;
-            return GetDlgItem(m_tab4Wnd, id);
+            c = GetDlgItem(m_tab4Wnd, id);
+            if (c) return c;
+            return GetDlgItem(m_tab5Wnd, id);
         }
 
         HWND addLabel(HWND parent, const wchar_t* text, int id = 0) const {
@@ -2781,6 +2893,20 @@ namespace {
         }
 
         // ---- "Fields" tab: every available field per source, one copyable row each ----
+        void createTab5Controls() {
+            auto checkbox = [&](const wchar_t* text, int id, bool first) {
+                HWND c = CreateWindowExW(0, L"BUTTON", text,
+                    WS_CHILD | WS_VISIBLE | WS_TABSTOP | (first ? WS_GROUP : 0) | BS_AUTOCHECKBOX,
+                    0, 0, 10, 10, m_tab5Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)),
+                    core_api::get_my_instance(), nullptr);
+                SendMessageW(c, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
+                return c;
+                };
+            m_keepDupFields = checkbox(L"Keep duplicate countries in the source fields (a result such as US+US gives two flags)", ID_KEEP_DUP_FIELDS, true);
+            m_keepDupLookup = checkbox(L"Keep duplicate countries in %countryflag_lookup% (one entry per artist, e.g. US; US)", ID_KEEP_DUP_LOOKUP, false);
+            createImportExportControls();
+        }
+
         void createTab3Controls() {
             m_fieldNote = addLabel(m_tab3Wnd,
                 L"Source 1 uses the fixed fields %countryflag_emoji%, %countryflag_path%, ...\n"
@@ -2902,12 +3028,12 @@ namespace {
         void createImportExportControls() {
             HINSTANCE inst = core_api::get_my_instance();
             HGDIOBJ gui = uiFont();
-            m_ieLabel = addLabel(m_tab2Wnd, L"Settings file (all tabs):");
+            m_ieLabel = addLabel(m_tab5Wnd, L"Settings file (all tabs):");
             m_importBtn = CreateWindowExW(0, L"BUTTON", L"Import...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, 0, 10, 10, m_tab2Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_IMPORT)), inst, nullptr);
+                0, 0, 10, 10, m_tab5Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_IMPORT)), inst, nullptr);
             SendMessageW(m_importBtn, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
             m_exportBtn = CreateWindowExW(0, L"BUTTON", L"Export...", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON,
-                0, 0, 10, 10, m_tab2Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_EXPORT)), inst, nullptr);
+                0, 0, 10, 10, m_tab5Wnd, reinterpret_cast<HMENU>(static_cast<INT_PTR>(ID_EXPORT)), inst, nullptr);
             SendMessageW(m_exportBtn, WM_SETFONT, reinterpret_cast<WPARAM>(gui), TRUE);
         }
 
@@ -3019,6 +3145,8 @@ namespace {
             data += "table.file2=" + escapeValue(readEdit(ID_ARTIST2_FILE)) + "\n";
             data += "table.file3=" + escapeValue(readEdit(ID_ARTIST3_FILE)) + "\n";
             data += std::string("table.artist-field=") + (artistFieldSelection() == 1 ? "area" : "country") + "\n";
+            data += std::string("lookup.keep-duplicates=") + (isChecked(ID_KEEP_DUP_LOOKUP) ? "1" : "0") + "\n";
+            data += std::string("fields.keep-duplicates=") + (isChecked(ID_KEEP_DUP_FIELDS) ? "1" : "0") + "\n";
             data += "aliases.file=" + escapeValue(readEdit(ID_ALIASES_FILE)) + "\n";
             data += "countries.file=" + escapeValue(readEdit(ID_COUNTRIES_FILE)) + "\n";
             data += "regions.file=" + escapeValue(readEdit(ID_REGIONS_FILE)) + "\n";
@@ -3091,6 +3219,8 @@ namespace {
             if (const std::string* v = get("table.file2")) setEdit(ID_ARTIST2_FILE, v->c_str());
             if (const std::string* v = get("table.file3")) setEdit(ID_ARTIST3_FILE, v->c_str());
             if (const std::string* v = get("table.artist-field")) setArtistFieldSelection(*v == "area" ? 1 : 0);
+            if (const std::string* v = get("lookup.keep-duplicates")) setChecked(ID_KEEP_DUP_LOOKUP, *v == "1");
+            if (const std::string* v = get("fields.keep-duplicates")) setChecked(ID_KEEP_DUP_FIELDS, *v == "1");
             if (const std::string* v = get("aliases.file")) setEdit(ID_ALIASES_FILE, v->c_str());
             if (const std::string* v = get("countries.file")) setEdit(ID_COUNTRIES_FILE, v->c_str());
             if (const std::string* v = get("regions.file")) setEdit(ID_REGIONS_FILE, v->c_str());
@@ -3198,7 +3328,6 @@ namespace {
             SendMessageW(m_orderMb, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             SendMessageW(m_orderWorld, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
             SendMessageW(m_orderFlat, WM_SETFONT, reinterpret_cast<WPARAM>(uiFont()), TRUE);
-            createImportExportControls();
         }
 
         // Fields tab: note on top, list in the middle, hint and Copy button below.
@@ -3254,6 +3383,22 @@ namespace {
             if (m_tab2Wnd) SetWindowPos(m_tab2Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
             if (m_tab3Wnd) SetWindowPos(m_tab3Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
             if (m_tab4Wnd) SetWindowPos(m_tab4Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
+            if (m_tab5Wnd) SetWindowPos(m_tab5Wnd, nullptr, rcTab.left, rcTab.top, tabW, tabH, SWP_NOZORDER | SWP_NOACTIVATE);
+            if (m_tab5Wnd && m_keepDupFields) {
+                // --- Layout Tab 5 (Settings) ---
+                const int w5 = (std::max)(S(100), tabW - 2 * margin);
+                int y5 = S(12);
+                SetWindowPos(m_keepDupFields, nullptr, margin, y5, w5, S(22), SWP_NOZORDER | SWP_NOACTIVATE);
+                y5 += S(30);
+                SetWindowPos(m_keepDupLookup, nullptr, margin, y5, w5, S(22), SWP_NOZORDER | SWP_NOACTIVATE);
+                // Settings file (Import / Export) below the checkboxes.
+                y5 += S(44);
+                const int ieW = S(120);
+                if (m_ieLabel) SetWindowPos(m_ieLabel, nullptr, margin, y5, w5, S(18), SWP_NOZORDER | SWP_NOACTIVATE);
+                y5 += S(22);
+                if (m_importBtn) SetWindowPos(m_importBtn, nullptr, margin, y5, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
+                if (m_exportBtn) SetWindowPos(m_exportBtn, nullptr, margin + ieW + gap, y5, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
+            }
 
             layoutFieldsTab();
 
@@ -3337,13 +3482,6 @@ namespace {
             pathRow(y2, m_tab2Wnd, m_statusRegions, ID_REGIONS_FILE, ID_REGIONS_BROWSE);
             labelRow(y2, m_aliasesLabel, S(34));
             pathRow(y2, m_tab2Wnd, m_statusAliases, ID_ALIASES_FILE, ID_ALIASES_BROWSE);
-            // Settings file buttons below the paths.
-            y2 += S(6);
-            const int ieW = S(120);
-            if (m_ieLabel) SetWindowPos(m_ieLabel, nullptr, margin, y2, fullW2, S(18), SWP_NOZORDER | SWP_NOACTIVATE);
-            y2 += S(22);
-            if (m_importBtn) SetWindowPos(m_importBtn, nullptr, margin, y2, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
-            if (m_exportBtn) SetWindowPos(m_exportBtn, nullptr, margin + ieW + gap, y2, ieW, S(26), SWP_NOZORDER | SWP_NOACTIVATE);
 
             int y4 = S(12);
             labelRow(y4, m_artist2Label, S(34));
@@ -3472,6 +3610,14 @@ namespace {
             const int ids[3] = { ID_ORDER_WORLD, ID_ORDER_FLAT, ID_ORDER_MB };
             for (int i = 0; i < 3; ++i)
                 if (control(ids[i])) SendMessageW(control(ids[i]), BM_SETCHECK, value == i ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+
+        void setChecked(int id, bool checked) const {
+            if (control(id)) SendMessageW(control(id), BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
+        }
+
+        int isChecked(int id) const {
+            return control(id) && SendMessageW(control(id), BM_GETCHECK, 0, 0) == BST_CHECKED ? 1 : 0;
         }
 
         void setArtistFieldSelection(int value) const {
@@ -3618,6 +3764,8 @@ namespace {
             setEdit(ID_ALIASES_FILE, g_cfgAliasesFile.get());
             setOrder((std::min)(2, (std::max)(0, (int)g_cfgTableOrder.get_value())));
             setArtistFieldSelection((int)g_cfgArtistAreaMode.get_value() == 1 ? 1 : 0);
+            setChecked(ID_KEEP_DUP_LOOKUP, g_cfgKeepDupLookup.get_value() != 0);
+            setChecked(ID_KEEP_DUP_FIELDS, g_cfgKeepDupFields.get_value() != 0);
             setEdit(ID_PREFIX1, kFixedText);
             setEdit(ID_PREFIX2, cleanSuffix(trim(g_cfgPrefix2.get()), 1).c_str());
             setEdit(ID_PREFIX3, cleanSuffix(trim(g_cfgPrefix3.get()), 2).c_str());
@@ -3631,10 +3779,13 @@ namespace {
             for (int id : kEditIds) m_original[id] = readEdit(id);
             m_originalOrder = orderSelection();
             m_originalArtistField = artistFieldSelection();
+            m_originalKeepDupLookup = isChecked(ID_KEEP_DUP_LOOKUP);
+            m_originalKeepDupFields = isChecked(ID_KEEP_DUP_FIELDS);
         }
 
         bool hasChanges() const {
-            if (orderSelection() != m_originalOrder || artistFieldSelection() != m_originalArtistField) return true;
+            if (orderSelection() != m_originalOrder || artistFieldSelection() != m_originalArtistField ||
+                isChecked(ID_KEEP_DUP_LOOKUP) != m_originalKeepDupLookup || isChecked(ID_KEEP_DUP_FIELDS) != m_originalKeepDupFields) return true;
             for (int id : kEditIds) {
                 const auto it = m_original.find(id);
                 if (it == m_original.end() || it->second != readEdit(id)) return true;
@@ -3650,11 +3801,13 @@ namespace {
         HWND m_tab3Wnd;                     // "Fields" tab: copyable list of all fields
         HWND m_fieldList, m_fieldHint, m_copyBtn;
         HWND m_fieldNote = nullptr;               // note above the list on the Fields tab
-        HWND m_ieLabel = nullptr;                 // caption of the Import / Export buttons (Folders tab)
+        HWND m_ieLabel = nullptr;                 // caption of the Import / Export buttons (Settings tab)
         std::vector<std::wstring> m_fieldTexts;   // field text of every list row
         bool m_ready;
         int m_originalOrder;
         int m_originalArtistField;
+        int m_originalKeepDupLookup;
+        int m_originalKeepDupFields;
         HWND m_note;
         HWND m_caption[5][3];   // per source: suffix / titleformat / fallback captions
         HFONT m_boldFont;
@@ -3663,11 +3816,13 @@ namespace {
         mutable bool m_settingScript;
         std::string m_autoFill[7];          // default locations currently shown in the path boxes
         HWND m_previewLabel, m_previewBox;   // Sources tab
-        HWND m_importBtn, m_exportBtn;       // Folders tab
+        HWND m_importBtn, m_exportBtn;       // Settings tab
         std::string m_lastPreview, m_lastPreviewLabel;
         HWND m_flagLabel, m_artistLabel, m_artist2Label, m_countriesLabel, m_regionsLabel, m_artist3Label, m_aliasesLabel;
         HWND m_orderLabel, m_orderWorld, m_orderFlat, m_orderMb;
         HWND m_artistFieldLabel, m_artistFieldCountry, m_artistFieldArea;
+        HWND m_tab5Wnd;                      // "Settings" tab
+        HWND m_keepDupLookup, m_keepDupFields;   // checkboxes on the Settings tab
         HWND m_statusFlag, m_statusArtist, m_statusArtist2, m_statusCountries, m_statusRegions, m_statusArtist3, m_statusAliases;
         HWND m_rowLabel[5];
         HFONT m_statusFont;
@@ -3681,6 +3836,7 @@ namespace {
         fb2k::CCoreDarkModeHooks m_tab2DarkMode;
         fb2k::CCoreDarkModeHooks m_tab3DarkMode;
         fb2k::CCoreDarkModeHooks m_tab4DarkMode;
+        fb2k::CCoreDarkModeHooks m_tab5DarkMode;
         preferences_page_callback::ptr m_callback;
         std::unordered_map<int, std::string> m_original;
     };
@@ -3740,6 +3896,7 @@ namespace {
 
             std::string value;
             std::vector<std::string> seen;
+            const bool keepDuplicates = g_cfgKeepDupFields.get_value() != 0;
             const char* separator = kind == 0 ? " " : "; ";
             for (const auto& iso : countries) {
                 std::string part;
@@ -3755,7 +3912,7 @@ namespace {
                     if (it == db().a2region.end()) break;
                     for (const auto& rs : it->second) {
                         const std::string& v = kind == 5 ? rs.first : rs.second;
-                        if (v.empty() || std::find(seen.begin(), seen.end(), v) != seen.end()) continue;
+                        if (v.empty() || (!keepDuplicates && std::find(seen.begin(), seen.end(), v) != seen.end())) continue;
                         seen.push_back(v);
                         if (!value.empty()) value += separator;
                         value += v;
